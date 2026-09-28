@@ -20,9 +20,10 @@ import {
   AdminDashboard, EventsTab, MeetingsTab, ApplicationsViewer, SponsorsAdmin,
   PhotosAdmin, CommunicationsAdmin, HeroEditor, ParticipationAdmin,
   HERO_DEFAULTS, PARTICIPATION_DEFAULTS, PARTICIPATION_KEYS,
+  HeroPresetSwitcher, meetingIsPast,
 } from '../App';
 import type {
-  SitePhase, EventData, Meeting, Sponsor, PhotoAlbum, HeroSettings,
+  HeroPreset, EventData, Meeting, Sponsor, PhotoAlbum, HeroSettings,
   ParticipationTypeKey, ParticipationConfig, EventSeries,
 } from '../App';
 
@@ -32,7 +33,7 @@ import type {
 // `api` object (see adminApi.ts comment).
 // ============================================================
 function useAdminData() {
-  const [phase, setPhase] = useState<SitePhase>('PLANNING');
+  const [heroPreset, setHeroPreset] = useState<HeroPreset>('PLANNING');
   const [events, setEvents] = useState<EventData[]>([]);
   const [eventSeries, setEventSeries] = useState<EventSeries[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
@@ -54,11 +55,12 @@ function useAdminData() {
 
       setEvents(dataE || []);
       setEventSeries(dataSeries || []);
-      setMeetings(dataM || []);
+      setMeetings((dataM || []).map((meeting: Meeting) => ({ ...meeting, isPast: meetingIsPast(meeting) })));
       setSponsors(dataS || []);
       setAlbums(dataP || []);
 
-      if (settings?.phase) setPhase(settings.phase as SitePhase);
+      const savedHeroPreset = settings?.hero_preset || settings?.phase;
+      if (savedHeroPreset) setHeroPreset(savedHeroPreset as HeroPreset);
 
       const readPhase = (slug: string, defaults: HeroSettings['planning']) => ({
         image:    settings?.[`hero_${slug}_image`]    ?? defaults.image,
@@ -90,7 +92,7 @@ function useAdminData() {
   useEffect(() => { refresh(); }, []);
 
   return {
-    phase, setPhase, events, eventSeries, meetings, sponsors, albums,
+    heroPreset, setHeroPreset, events, eventSeries, meetings, sponsors, albums,
     heroSettings, setHeroSettings, participationConfigs, setParticipationConfigs,
     refresh,
   };
@@ -172,6 +174,17 @@ function SectionNav() {
 function AdminAuthedShell({ onLogout }: { onLogout: () => void }) {
   const data = useAdminData();
 
+  const changeHeroPreset = async (next: HeroPreset) => {
+    const previous = data.heroPreset;
+    data.setHeroPreset(next);
+    try {
+      await adminApi.post('/api/settings', { hero_preset: next, phase: next });
+    } catch {
+      data.setHeroPreset(previous);
+      alert('Could not change the homepage banner. Please try again.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 p-6 md:p-10 font-sans overflow-x-hidden">
       <div className="max-w-7xl mx-auto">
@@ -184,20 +197,7 @@ function AdminAuthedShell({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
-              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest px-2">Site Phase:</span>
-              {(['PLANNING', 'ACTIVE_PLANNING', 'LIVE_EVENT'] as SitePhase[]).map(p => (
-                <button
-                  key={p}
-                  onClick={() => { data.setPhase(p); adminApi.post('/api/settings', { phase: p }); }}
-                  className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
-                    data.phase === p ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-800'
-                  }`}
-                >
-                  {p === 'PLANNING' ? 'Planning' : p === 'ACTIVE_PLANNING' ? 'Active' : 'Live'}
-                </button>
-              ))}
-            </div>
+            <HeroPresetSwitcher value={data.heroPreset} onChange={changeHeroPreset} />
             <button
               onClick={onLogout}
               className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-500 rounded-xl text-xs font-bold hover:bg-gray-100 transition-colors shadow-sm"

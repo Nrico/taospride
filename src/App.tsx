@@ -36,7 +36,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Types ---
-export type SitePhase = 'PLANNING' | 'ACTIVE_PLANNING' | 'LIVE_EVENT';
+export type HeroPreset = 'PLANNING' | 'ACTIVE_PLANNING' | 'LIVE_EVENT';
 
 export interface EventSeries {
   id: number | string;
@@ -268,7 +268,7 @@ export interface Meeting {
 
 type SponsorshipState = 'open' | 'closed' | 'hidden';
 
-const meetingIsPast = (meeting: Meeting) => {
+export const meetingIsPast = (meeting: Meeting) => {
   let dateKey = /^\d{4}-\d{2}-\d{2}$/.test(meeting.date) ? meeting.date : '';
   if (!dateKey) {
     const parsed = new Date(meeting.date);
@@ -606,7 +606,7 @@ export const AdminDashboard = ({ events, meetings, sponsors }: { events: EventDa
 // ── Admin: Tab bar ────────────────────────────────────────────────────────────
 type AdminTab = 'overview' | 'events' | 'meetings' | 'applications' | 'sponsors' | 'photos' | 'comms' | 'hero' | 'participation';
 
-// Per-phase hero configuration stored in site_settings
+// Three reusable homepage-banner presets stored in site_settings.
 interface HeroPhaseConfig {
   image: string;
   line1: string;
@@ -637,6 +637,35 @@ export const HERO_DEFAULTS: HeroSettings = {
     ctaLabel: 'See the Schedule', ctaHref: '#events',
   },
 };
+
+export const HERO_PRESET_OPTIONS: { value: HeroPreset; label: string }[] = [
+  { value: 'PLANNING', label: 'Resting' },
+  { value: 'ACTIVE_PLANNING', label: 'Planning' },
+  { value: 'LIVE_EVENT', label: 'Festival Live' },
+];
+
+export const HeroPresetSwitcher = ({ value, onChange }: {
+  value: HeroPreset;
+  onChange: (preset: HeroPreset) => void;
+}) => (
+  <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
+    <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest px-2">Homepage banner:</span>
+    {HERO_PRESET_OPTIONS.map(option => (
+      <button
+        key={option.value}
+        type="button"
+        onClick={() => onChange(option.value)}
+        aria-pressed={value === option.value}
+        title={`Show the ${option.label.toLowerCase()} homepage banner`}
+        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
+          value === option.value ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-800'
+        }`}
+      >
+        {option.label}
+      </button>
+    ))}
+  </div>
+);
 
 // ── Participation config ──────────────────────────────────────────────────────
 export type ParticipationTypeKey = 'volunteer' | 'vendor' | 'performer' | 'parade';
@@ -2131,7 +2160,7 @@ export const MeetingsTab = ({ meetings, onRefresh }: { meetings: Meeting[]; onRe
   const [selectedId, setSelectedId] = useState<string | null>(
     meetings.find(m => !m.isPast)?.id ?? meetings[0]?.id ?? null
   );
-  // Independent of site phase on purpose — see the showMeetings comment in
+  // Independent of the homepage banner on purpose — see the showMeetings comment in
   // App(). Self-contained here rather than threaded through props/fetchData
   // since it's a simple standalone setting.
   const [showMeetings, setShowMeetings] = useState(true);
@@ -2169,7 +2198,7 @@ export const MeetingsTab = ({ meetings, onRefresh }: { meetings: Meeting[]; onRe
         <div>
           <p className="text-sm font-bold text-gray-800">Show Meetings section on public site</p>
           <p className="text-xs text-gray-400">
-            Independent of site phase — leave this on any time you want meeting times public, even after going live.
+            Leave this on whenever you want meeting times public, regardless of the selected homepage banner.
           </p>
         </div>
         <button
@@ -3865,9 +3894,9 @@ export const ParticipationAdmin = ({
 export const HeroEditor = ({ initial, onSaved }: { initial: HeroSettings; onSaved: (s: HeroSettings) => void }) => {
   type PhaseKey = 'planning' | 'activePlanning' | 'liveEvent';
   const PHASE_LABELS: Record<PhaseKey, string> = {
-    planning: 'Planning Phase',
-    activePlanning: 'Active Planning Phase',
-    liveEvent: 'Live Event Phase',
+    planning: 'Resting Banner',
+    activePlanning: 'Planning Banner',
+    liveEvent: 'Festival Live Banner',
   };
   const [activePhase, setActivePhase] = useState<PhaseKey>('planning');
   const [values, setValues] = useState<HeroSettings>(initial);
@@ -3916,11 +3945,11 @@ export const HeroEditor = ({ initial, onSaved }: { initial: HeroSettings; onSave
       <div>
         <h2 className="text-xl font-black text-gray-900 mb-1">Hero Banner</h2>
         <p className="text-sm text-gray-500">
-          Each site phase shows a different full-screen banner. Edit the image, headline, subtext, and call-to-action for each phase below.
+          Edit the three reusable homepage banners here. Selecting a banner changes only the homepage hero—it does not publish events or open and close other sections.
         </p>
       </div>
 
-      {/* Phase tabs */}
+      {/* Banner preset tabs */}
       <div className="flex gap-2 flex-wrap">
         {(Object.keys(PHASE_LABELS) as PhaseKey[]).map(p => (
           <button
@@ -4101,7 +4130,7 @@ export const SponsorsAdmin = ({ sponsors, onRefresh }: { sponsors: Sponsor[]; on
   const [logoPreview, setLogoPreview] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // Independent of site phase on purpose — see the sponsorshipState comment
+  // Independent of the homepage banner on purpose — see the sponsorshipState comment
   // in App(). Self-contained here rather than threaded through props/
   // fetchData since it's a simple standalone setting.
   const [sponsorshipState, setSponsorshipState] = useState<SponsorshipState>('open');
@@ -4676,7 +4705,7 @@ const SponsorshipSection = ({ sponsors, state }: { sponsors: Sponsor[]; state: S
 
         {/* Sponsorship closed: small nudge instead of the full pitch. Phrased
             generically (not "future events") since this is independent of
-            phase now — sponsorship could be closed for a still-upcoming event. */}
+            banner preset — sponsorship could be closed for a still-upcoming event. */}
         {state === 'closed' && (
           <div className="text-center mt-12">
             <p className="text-gray-400 text-sm">
@@ -4943,7 +4972,7 @@ const ContributionSection = () => {
 };
 
 export default function App() {
-  const [phase, setPhase] = useState<SitePhase>('PLANNING');
+  const [heroPreset, setHeroPreset] = useState<HeroPreset>('PLANNING');
   const [isManageMode, setIsManageMode] = useState(false);
   const [password, setPassword] = useState("");
   const [isAuthed, setIsAuthed] = useState(() => sessionStorage.getItem('tp_admin') === '1');
@@ -4958,12 +4987,12 @@ export default function App() {
   const [albums, setAlbums] = useState<PhotoAlbum[]>([]);
   const [heroSettings, setHeroSettings] = useState<HeroSettings>(HERO_DEFAULTS);
   const [participationConfigs, setParticipationConfigs] = useState<Record<ParticipationTypeKey, ParticipationConfig>>(PARTICIPATION_DEFAULTS);
-  // Independent of `phase` on purpose — these used to be inferred from the
-  // phase (Meetings hid at LIVE_EVENT, Sponsors switched to thank-you framing
+  // Independent of the homepage banner on purpose — these used to be inferred
+  // from the old site phase (Meetings hid at LIVE_EVENT, Sponsors switched to thank-you framing
   // at LIVE_EVENT), which broke when reality didn't match the assumption
   // (still recruiting sponsors after going live; still holding public
   // meetings after going live). Both default to "on" until explicitly
-  // changed, regardless of phase.
+  // changed, regardless of the banner preset.
   const [showMeetings, setShowMeetings] = useState(true);
   const [sponsorshipState, setSponsorshipState] = useState<SponsorshipState>('open');
 
@@ -4997,7 +5026,8 @@ export default function App() {
       ]);
       setAlbums(dataP || []);
 
-      if (settings?.phase) setPhase(settings.phase as SitePhase);
+      const savedHeroPreset = settings?.hero_preset || settings?.phase;
+      if (savedHeroPreset) setHeroPreset(savedHeroPreset as HeroPreset);
       setShowMeetings(settings?.show_meetings_section !== '0');
       const legacySponsorshipState: SponsorshipState = settings?.sponsorship_open === '0' ? 'closed' : 'open';
       setSponsorshipState(settings?.sponsorship_state || legacySponsorshipState);
@@ -5058,6 +5088,19 @@ export default function App() {
       }
     } catch {
       alert("Unable to sign in. Please try again.");
+    }
+  };
+
+  const changeHeroPreset = async (next: HeroPreset) => {
+    const previous = heroPreset;
+    setHeroPreset(next);
+    try {
+      // Keep the legacy key synchronized so an older cached frontend still
+      // displays the same banner during a deployment transition.
+      await api.post('/api/settings', { hero_preset: next, phase: next });
+    } catch {
+      setHeroPreset(previous);
+      alert('Could not change the homepage banner. Please try again.');
     }
   };
 
@@ -5129,21 +5172,7 @@ export default function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {/* Phase switcher */}
-              <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
-                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest px-2">Site Phase:</span>
-                {(['PLANNING','ACTIVE_PLANNING','LIVE_EVENT'] as SitePhase[]).map(p => (
-                  <button
-                    key={p}
-                    onClick={() => { setPhase(p); api.post('/api/settings', { phase: p }); }}
-                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
-                      phase === p ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-800'
-                    }`}
-                  >
-                    {p === 'PLANNING' ? 'Planning' : p === 'ACTIVE_PLANNING' ? 'Active' : 'Live'}
-                  </button>
-                ))}
-              </div>
+              <HeroPresetSwitcher value={heroPreset} onChange={changeHeroPreset} />
               <button
                 onClick={() => { sessionStorage.removeItem('tp_admin'); setIsAuthed(false); api.post('/api/auth/logout', {}); }}
                 className="px-4 py-2 bg-white border border-gray-200 text-gray-500 rounded-xl text-xs font-bold hover:bg-gray-100 transition-colors shadow-sm"
@@ -5216,7 +5245,7 @@ export default function App() {
 
 {/* Hero Section */}
       {(() => {
-        const hk = phase === 'PLANNING' ? 'planning' : phase === 'ACTIVE_PLANNING' ? 'activePlanning' : 'liveEvent';
+        const hk = heroPreset === 'PLANNING' ? 'planning' : heroPreset === 'ACTIVE_PLANNING' ? 'activePlanning' : 'liveEvent';
         const hc = heroSettings[hk];
         const hd = HERO_DEFAULTS[hk];
         const line1    = hc.line1    || hd.line1;
@@ -5239,7 +5268,7 @@ export default function App() {
 
             <div className="relative z-10 text-center px-6 max-w-5xl">
               <motion.div
-                key={phase}
+                key={heroPreset}
                 initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="space-y-6"
@@ -5284,8 +5313,8 @@ export default function App() {
       })()}
 
       {/* Meetings Section — independent "Show Meetings section" toggle (Meetings
-          admin tab), not tied to phase. Has its own "no meetings scheduled"
-          empty state, so there's no need to auto-hide it based on phase. */}
+          admin tab), not tied to the banner preset. Has its own "no meetings scheduled"
+          empty state, so there's no need to auto-hide it based on the banner. */}
       {showMeetings && (
         <section id="meetings" className="py-32 px-6 bg-white border-b border-gray-100">
            <div className="max-w-7xl mx-auto">
@@ -5320,7 +5349,7 @@ export default function App() {
         </section>
       )}
 
-      {/* Event lifecycle is independent of the promotional hero phase. */}
+      {/* Event lifecycle is independent of the homepage banner preset. */}
       <section id="events" className="py-32 px-6 max-w-7xl mx-auto">
         <SectionHeading subtitle="Celebrations, gatherings, fundraisers, and community events throughout the year.">
           Upcoming Events

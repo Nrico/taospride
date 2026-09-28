@@ -5,7 +5,7 @@
 
 SET FOREIGN_KEY_CHECKS = 0;
 
--- Site-wide configuration (phase, dates, etc.)
+-- Site-wide configuration (homepage banner preset, dates, etc.)
 CREATE TABLE IF NOT EXISTS site_settings (
   id            INT AUTO_INCREMENT PRIMARY KEY,
   setting_key   VARCHAR(100) UNIQUE NOT NULL,
@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS site_settings (
 );
 
 INSERT INTO site_settings (setting_key, setting_value) VALUES
-  ('phase',        'PLANNING'),
+  ('phase',        'PLANNING'), -- legacy mirror of hero_preset
+  ('hero_preset',  'PLANNING'),
   ('event_year',   '2026'),
   ('festival_start', ''),
   ('festival_end',   ''),

@@ -46,7 +46,7 @@ try {
             handle_auth($method, $parts[1] ?? '');
             break;
 
-        // --- Site settings / phase ---
+        // --- Public presentation settings ---
         case 'settings':
             handle_settings($method);
             break;
@@ -193,6 +193,7 @@ function handle_auth(string $method, string $action): void {
 function is_public_setting_key(string $key): bool {
     static $exact = [
         'phase',
+        'hero_preset',
         'event_year',
         'festival_start',
         'festival_end',

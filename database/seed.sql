@@ -12,7 +12,8 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 -- ── Site settings ────────────────────────────────────────────
 INSERT INTO site_settings (setting_key, setting_value) VALUES
-  ('phase',              'PLANNING'),
+  ('phase',              'PLANNING'), -- legacy mirror of hero_preset
+  ('hero_preset',        'PLANNING'),
   ('event_year',         '2026'),
   ('festival_start',     'August 8, 2026'),
   ('festival_end',       'August 15, 2026'),

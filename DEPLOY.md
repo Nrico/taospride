@@ -52,7 +52,25 @@ You'll see a string of green success messages. Any red errors mean you either di
 
 ---
 
-## Step 3 — Set the password securely
+## Step 3 — Set or upgrade the password securely
+
+### Existing Taos Pride installation (recommended)
+
+Do not put a password or hash in a file. After completing the event database
+migration and extracting the new cPanel ZIP, immediately visit
+`https://taospride.org/admin` and sign in with the current password. The page
+will recognize the legacy account and ask you to choose a new password of at
+least 16 characters. The server will:
+
+1. Verify the current password.
+2. Hash the new password using PHP's current secure default.
+3. Delete the old plaintext site password and retired board credentials.
+4. Sign you into the unified admin.
+
+Sign out and sign back in with the new password to verify the upgrade. This
+one-time browser flow avoids requiring Terminal on the deployment computer.
+
+### Brand-new installation
 
 Generate a password hash locally. The helper prompts without echoing the password
 and never writes the password to disk or shell history:

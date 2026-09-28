@@ -9,6 +9,8 @@ const __dirname = path.dirname(__filename);
 
 // Dev session — persisted to data/.session so server restarts don't log you out
 const DEV_PASSWORD = process.env.DEV_ADMIN_PASSWORD;
+let activeDevPassword = DEV_PASSWORD;
+let devPasswordMigrationRequired = process.env.DEV_FORCE_PASSWORD_MIGRATION === "1";
 const SESSION_FILE = path.join(process.cwd(), "data", ".session");
 
 const readSession = async (): Promise<boolean> => {
@@ -39,15 +41,37 @@ async function startServer() {
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   app.post("/api/auth/login", async (req, res) => {
-    if (!DEV_PASSWORD) {
+    if (!activeDevPassword) {
       return res.status(503).json({ error: "DEV_ADMIN_PASSWORD is not configured" });
     }
-    if (req.body?.password === DEV_PASSWORD) {
+    if (devPasswordMigrationRequired) {
+      return res.status(409).json({
+        error: "A one-time password security upgrade is required.",
+        code: "password_migration_required",
+      });
+    }
+    if (req.body?.password === activeDevPassword) {
       await writeSession(true);
       res.json({ success: true });
     } else {
       res.status(401).json({ error: "Invalid password" });
     }
+  });
+
+  app.post("/api/auth/migrate-password", async (req, res) => {
+    if (!devPasswordMigrationRequired || !activeDevPassword) {
+      return res.status(409).json({ error: "The password security upgrade is not available." });
+    }
+    if (req.body?.currentPassword !== activeDevPassword) {
+      return res.status(401).json({ error: "The current password is incorrect." });
+    }
+    if (typeof req.body?.newPassword !== "string" || req.body.newPassword.length < 16 || req.body.newPassword.length > 256) {
+      return res.status(422).json({ error: "The new password must be between 16 and 256 characters." });
+    }
+    activeDevPassword = req.body.newPassword;
+    devPasswordMigrationRequired = false;
+    await writeSession(true);
+    res.json({ success: true });
   });
 
   app.post("/api/auth/logout", async (_req, res) => {

@@ -58,15 +58,18 @@ const instructions = `TAOS PRIDE CPANEL RELEASE
 Created: ${new Date().toISOString()}
 
 1. Back up the production database.
-2. In phpMyAdmin, run RUN-IN-PHPMYADMIN.sql once. Never run it twice.
-3. Complete the password-hash migration described in DEPLOY.md if it has not
-   already been completed.
-4. In cPanel File Manager, open public_html.
-5. Upload taospride-cpanel.zip into public_html.
-6. Select the ZIP and choose Extract. Extract into public_html itself.
-7. Confirm overwrite when cPanel asks.
-8. Delete the uploaded ZIP from the server after extraction.
-9. Visit https://taospride.org and https://taospride.org/api/health.
+2. In phpMyAdmin, run RUN-IN-PHPMYADMIN.sql. It is restart-safe if a previous
+   attempt was interrupted, but still confirm that phpMyAdmin reports success.
+3. In cPanel File Manager, open public_html.
+4. Upload taospride-cpanel.zip into public_html.
+5. Select the ZIP and choose Extract. Extract into public_html itself.
+6. Confirm overwrite when cPanel asks.
+7. Immediately visit https://taospride.org/admin. If prompted for the one-time
+   security upgrade, enter the current password and choose a NEW password of
+   at least 16 characters. The server hashes it and removes old plaintext rows.
+8. Sign out and sign back in with the new password.
+9. Delete the uploaded ZIP from the server after extraction.
+10. Visit https://taospride.org and https://taospride.org/api/health.
 
 This package deliberately excludes:
 - api/config.php (production database credentials)

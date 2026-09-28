@@ -55,10 +55,20 @@ before extracting the package; those server-only files must remain in place.
 
 ## Security deployment order
 
-When deploying the hash-only authentication update, complete the password-hash
-database migration in `DEPLOY.md` before extracting the new package. This avoids
-locking administrators out between the database and PHP updates.
+After extracting the new package, immediately open
+`https://taospride.org/admin`. If the existing installation still has a legacy
+plaintext administrator password, the login page automatically opens a one-time
+security upgrade. Enter the current password, then choose and confirm a new
+password of at least 16 characters. The server stores only its secure hash,
+removes the old site and board password rows, and signs you in. Sign out and back
+in once to verify the new credential.
+
+This browser flow is for upgrading the existing live installation and does not
+require PHP, React, Node, or Terminal on the computer doing the deployment. A
+brand-new installation with no existing administrator password should use the
+hash helper described in `DEPLOY.md`.
 
 The event-lifecycle release also requires `RUN-IN-PHPMYADMIN.sql`. Back up the
 database, open phpMyAdmin's **SQL** tab, and run that file once before extracting
-the corresponding cPanel ZIP. Do not run the migration more than once.
+the corresponding cPanel ZIP. The migration records a completion marker and is
+safe to retry if the first attempt is interrupted.

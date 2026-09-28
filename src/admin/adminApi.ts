@@ -8,11 +8,28 @@
 // the other (the old #manage path is slated for removal in Phase 4).
 // ============================================================
 
+export class AdminApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'AdminApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 const checkOk = async (r: Response) => {
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
-    try { const b = await r.json(); msg = b.error ?? msg; } catch {}
-    throw new Error(msg);
+    let code: string | undefined;
+    try {
+      const b = await r.json();
+      msg = b.error ?? msg;
+      code = b.code;
+    } catch {}
+    throw new AdminApiError(msg, r.status, code);
   }
   return r.json();
 };

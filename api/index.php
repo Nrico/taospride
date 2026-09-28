@@ -162,6 +162,12 @@ function handle_auth(string $method, string $action): void {
         // Never fall back to a plaintext site_settings row: settings are
         // primarily public content, and a legacy plaintext row is unsafe even
         // if a future response-filtering regression occurs.
+        if ($hash === '' && setting('admin_password_plain') !== '') {
+            json_response([
+                'error' => 'A one-time password security upgrade is required.',
+                'code' => 'password_migration_required',
+            ], 409);
+        }
         $ok = ($hash !== '' && password_verify($pw, $hash));
         record_login_attempt($ok);
         if ($ok) {
@@ -170,6 +176,50 @@ function handle_auth(string $method, string $action): void {
         } else {
             error_response('Invalid access code', 401);
         }
+    } elseif ($action === 'migrate-password' && $method === 'POST') {
+        require_not_rate_limited('admin');
+        $body = body();
+        $currentPassword = (string)($body['currentPassword'] ?? '');
+        $newPassword = (string)($body['newPassword'] ?? '');
+        $hash = setting('admin_password_hash');
+        $legacyPassword = setting('admin_password_plain');
+
+        if ($hash !== '') {
+            error_response('The password security upgrade has already been completed.', 409);
+        }
+        if ($legacyPassword === '') {
+            error_response('No legacy administrator account is available to upgrade.', 409);
+        }
+        if (strlen($newPassword) < 16 || strlen($newPassword) > 256) {
+            error_response('The new password must be between 16 and 256 characters.', 422);
+        }
+
+        $ok = hash_equals($legacyPassword, $currentPassword);
+        record_login_attempt($ok);
+        if (!$ok) error_response('The current password is incorrect.', 401);
+
+        $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
+        if ($newHash === false) error_response('Unable to secure the new password.', 500);
+
+        $db = db();
+        $db->beginTransaction();
+        try {
+            $db->prepare(
+                'INSERT INTO site_settings (setting_key, setting_value) VALUES (?,?)
+                 ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)'
+            )->execute(['admin_password_hash', $newHash]);
+            $db->exec(
+                "DELETE FROM site_settings WHERE setting_key IN
+                 ('admin_password_plain','board_password_plain','board_password_hash')"
+            );
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+
+        $_SESSION[SESSION_KEY] = true;
+        json_response(['success' => true]);
     } elseif ($action === 'logout') {
         // Targeted unset instead of session_destroy() — clears the admin
         // session AND the vault unlock (vault must never outlive its parent

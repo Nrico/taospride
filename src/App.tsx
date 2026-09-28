@@ -5086,8 +5086,12 @@ export default function App() {
       } else {
         alert("Invalid password");
       }
-    } catch {
-      alert("Unable to sign in. Please try again.");
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('security upgrade')) {
+        window.location.href = '/admin';
+      } else {
+        alert(err instanceof Error ? err.message : 'Unable to sign in. Please try again.');
+      }
     }
   };
 

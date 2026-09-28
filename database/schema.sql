@@ -24,6 +24,12 @@ INSERT INTO site_settings (setting_key, setting_value) VALUES
   ('sponsorship_state', 'open')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
+-- A fresh schema already has the event lifecycle columns, so mark its backfill
+-- complete. The update migration uses this to avoid publishing future drafts.
+INSERT INTO site_settings (setting_key, setting_value) VALUES
+  ('migration_2026_09_28_event_lifecycle', 'complete')
+ON DUPLICATE KEY UPDATE setting_key = setting_key;
+
 -- ============================================================
 -- EVENT SERIES / FESTIVALS
 -- ============================================================

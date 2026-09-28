@@ -62,7 +62,7 @@ async function startServer() {
   // ── Settings ──────────────────────────────────────────────────────────────
   const isPublicSettingKey = (key: string) => [
     "phase", "event_year", "festival_start", "festival_end", "tagline",
-    "show_meetings_section", "sponsorship_open",
+    "show_meetings_section", "sponsorship_open", "sponsorship_state",
   ].includes(key)
     || /^hero_(planning|active|live)_(image|line1|line2|sub|ctaLabel|ctaHref)$/.test(key)
     || /^participate_(volunteer|vendor|performer|parade)$/.test(key);

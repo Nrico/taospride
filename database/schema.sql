@@ -18,7 +18,9 @@ INSERT INTO site_settings (setting_key, setting_value) VALUES
   ('event_year',   '2026'),
   ('festival_start', ''),
   ('festival_end',   ''),
-  ('tagline',      'Love Is Resistant')
+  ('tagline',      'Love Is Resistant'),
+  ('show_meetings_section', '1'),
+  ('sponsorship_state', 'open')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
 -- ============================================================

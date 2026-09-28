@@ -266,6 +266,24 @@ export interface Meeting {
   notes?: string;
 }
 
+type SponsorshipState = 'open' | 'closed' | 'hidden';
+
+const meetingIsPast = (meeting: Meeting) => {
+  let dateKey = /^\d{4}-\d{2}-\d{2}$/.test(meeting.date) ? meeting.date : '';
+  if (!dateKey) {
+    const parsed = new Date(meeting.date);
+    if (!Number.isNaN(parsed.getTime())) {
+      dateKey = [
+        parsed.getFullYear(),
+        String(parsed.getMonth() + 1).padStart(2, '0'),
+        String(parsed.getDate()).padStart(2, '0'),
+      ].join('-');
+    }
+  }
+  if (dateKey) return dateKey < mountainNowKey().slice(0, 10);
+  return Boolean(meeting.isPast);
+};
+
 export interface PhotoAlbum {
   id?: string;
   title: string;
@@ -2633,7 +2651,7 @@ const SuggestionBoxForm = () => {
   );
 };
 
-const Navbar = ({ showMeetings }: { showMeetings: boolean }) => {
+const Navbar = ({ showMeetings, showSponsors }: { showMeetings: boolean; showSponsors: boolean }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -2648,7 +2666,7 @@ const Navbar = ({ showMeetings }: { showMeetings: boolean }) => {
     { name: 'Meetings', href: '#meetings', hidden: !showMeetings },
     { name: 'Volunteer', href: '#volunteer' },
     { name: 'Photos', href: '/gallery' },
-    { name: 'Sponsors', href: '#sponsors' },
+    { name: 'Sponsors', href: '#sponsors', hidden: !showSponsors },
   ];
 
   return (
@@ -4083,24 +4101,30 @@ export const SponsorsAdmin = ({ sponsors, onRefresh }: { sponsors: Sponsor[]; on
   const [logoPreview, setLogoPreview] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // Independent of site phase on purpose — see the sponsorshipOpen comment
+  // Independent of site phase on purpose — see the sponsorshipState comment
   // in App(). Self-contained here rather than threaded through props/
   // fetchData since it's a simple standalone setting.
-  const [sponsorshipOpen, setSponsorshipOpen] = useState(true);
+  const [sponsorshipState, setSponsorshipState] = useState<SponsorshipState>('open');
   const [savingOpen, setSavingOpen] = useState(false);
 
   useEffect(() => {
-    api.get('/api/settings').then(s => setSponsorshipOpen(s?.sponsorship_open !== '0')).catch(() => {});
+    api.get('/api/settings').then(s => {
+      const legacyState: SponsorshipState = s?.sponsorship_open === '0' ? 'closed' : 'open';
+      setSponsorshipState(s?.sponsorship_state || legacyState);
+    }).catch(() => {});
   }, []);
 
-  const toggleSponsorshipOpen = async () => {
-    const next = !sponsorshipOpen;
-    setSponsorshipOpen(next);
+  const saveSponsorshipState = async (next: SponsorshipState) => {
+    const previous = sponsorshipState;
+    setSponsorshipState(next);
     setSavingOpen(true);
     try {
-      await api.post('/api/settings', { sponsorship_open: next ? '1' : '0' });
+      await api.post('/api/settings', {
+        sponsorship_state: next,
+        sponsorship_open: next === 'open' ? '1' : '0',
+      });
     } catch {
-      setSponsorshipOpen(!next);
+      setSponsorshipState(previous);
       alert('Could not save — please try again.');
     } finally {
       setSavingOpen(false);
@@ -4168,21 +4192,23 @@ export const SponsorsAdmin = ({ sponsors, onRefresh }: { sponsors: Sponsor[]; on
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-5 py-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between bg-white border border-gray-200 rounded-2xl px-5 py-4">
         <div>
-          <p className="text-sm font-bold text-gray-800">Sponsorship is open</p>
+          <p className="text-sm font-bold text-gray-800">Public sponsorship section</p>
           <p className="text-xs text-gray-400">
-            Independent of site phase — turn off once your tiers are locked in to switch the public
-            page to a thank-you page instead of a pitch, whenever that actually happens.
+            Open accepts inquiries, Closed shows current partners without an application pitch, and Hidden removes the section.
           </p>
         </div>
-        <button
-          onClick={toggleSponsorshipOpen}
-          disabled={savingOpen}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 shrink-0 ml-4 ${sponsorshipOpen ? 'bg-pink-500' : 'bg-gray-200'}`}
-        >
-          <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${sponsorshipOpen ? 'translate-x-6' : 'translate-x-1'}`} />
-        </button>
+        <div className="inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1 shrink-0">
+          {(['open', 'closed', 'hidden'] as SponsorshipState[]).map(state => (
+            <button key={state} onClick={() => saveSponsorshipState(state)} disabled={savingOpen}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black capitalize transition-colors disabled:opacity-50 ${
+                sponsorshipState === state ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-500 hover:text-gray-900'
+              }`}>
+              {state}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex gap-6 min-h-[580px]">
@@ -4392,7 +4418,7 @@ export const SponsorsAdmin = ({ sponsors, onRefresh }: { sponsors: Sponsor[]; on
 };
 
 // ── Sponsorship Section ───────────────────────────────────────────────────────
-const SponsorshipSection = ({ sponsors, sponsorshipOpen }: { sponsors: Sponsor[]; sponsorshipOpen: boolean }) => {
+const SponsorshipSection = ({ sponsors, state }: { sponsors: Sponsor[]; state: SponsorshipState }) => {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', org: '', email: '', tier: '', message: '' });
   const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
@@ -4430,10 +4456,10 @@ const SponsorshipSection = ({ sponsors, sponsorshipOpen }: { sponsors: Sponsor[]
         <div className="text-center mb-20">
           <p className="text-pink-500 font-black uppercase tracking-[0.3em] text-xs mb-4">Partnership Opportunities</p>
           <h2 className="text-5xl md:text-6xl font-display font-black uppercase tracking-tighter text-gray-900 mb-6">
-            {sponsorshipOpen ? 'Become a Sponsor' : 'Our Proud Partners'}
+            {state === 'open' ? 'Become a Sponsor' : 'Our Proud Partners'}
           </h2>
           <p className="text-gray-500 max-w-2xl mx-auto leading-relaxed text-lg">
-            {sponsorshipOpen
+            {state === 'open'
               ? 'Connect your brand with the heart of Taos. Support an event that brings joy, visibility, and community across Northern New Mexico.'
               : 'These organizations make Taos Pride possible. We are deeply grateful for their commitment to the LGBTQ+ community of Northern New Mexico.'}
           </p>
@@ -4485,7 +4511,7 @@ const SponsorshipSection = ({ sponsors, sponsorshipOpen }: { sponsors: Sponsor[]
         )}
 
         {/* Sponsorship tier cards */}
-        {sponsorshipOpen && (
+        {state === 'open' && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
               {SPONSOR_TIERS.map(tier => (
@@ -4651,7 +4677,7 @@ const SponsorshipSection = ({ sponsors, sponsorshipOpen }: { sponsors: Sponsor[]
         {/* Sponsorship closed: small nudge instead of the full pitch. Phrased
             generically (not "future events") since this is independent of
             phase now — sponsorship could be closed for a still-upcoming event. */}
-        {!sponsorshipOpen && (
+        {state === 'closed' && (
           <div className="text-center mt-12">
             <p className="text-gray-400 text-sm">
               Interested in sponsoring Taos Pride?{' '}
@@ -4937,9 +4963,9 @@ export default function App() {
   // at LIVE_EVENT), which broke when reality didn't match the assumption
   // (still recruiting sponsors after going live; still holding public
   // meetings after going live). Both default to "on" until explicitly
-  // turned off, regardless of phase.
+  // changed, regardless of phase.
   const [showMeetings, setShowMeetings] = useState(true);
-  const [sponsorshipOpen, setSponsorshipOpen] = useState(true);
+  const [sponsorshipState, setSponsorshipState] = useState<SponsorshipState>('open');
 
   useEffect(() => {
     const handleHash = () => setIsManageMode(window.location.hash === '#manage');
@@ -4962,9 +4988,10 @@ export default function App() {
 
       setEvents(dataE || []);
       setEventSeries(dataSeries || []);
-      setMeetings(dataM.length ? dataM : [
+      const loadedMeetings: Meeting[] = dataM.length ? dataM : [
         { id: 'm1', date: 'Date TBD', time: '6:30 PM', location: 'Meeting Room', whoIsInvited: 'Everyone' }
-      ]);
+      ];
+      setMeetings(loadedMeetings.map(meeting => ({ ...meeting, isPast: meetingIsPast(meeting) })));
       setSponsors(dataS.length ? dataS : [
         { name: 'Taos Ski Valley', level: 'Platinum', logoInitials: 'TSV' }
       ]);
@@ -4972,7 +4999,8 @@ export default function App() {
 
       if (settings?.phase) setPhase(settings.phase as SitePhase);
       setShowMeetings(settings?.show_meetings_section !== '0');
-      setSponsorshipOpen(settings?.sponsorship_open !== '0');
+      const legacySponsorshipState: SponsorshipState = settings?.sponsorship_open === '0' ? 'closed' : 'open';
+      setSponsorshipState(settings?.sponsorship_state || legacySponsorshipState);
 
       // Extract hero settings from flat settings map
       const readPhase = (slug: string, defaults: HeroPhaseConfig): HeroPhaseConfig => ({
@@ -5172,7 +5200,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFCF8] text-gray-900 font-sans selection:bg-pink-200 selection:text-pink-900 pb-20">
-      <Navbar showMeetings={showMeetings} />
+      <Navbar showMeetings={showMeetings} showSponsors={sponsorshipState !== 'hidden'} />
       
       {activeFormType && (
         <ParticipationForm
@@ -5346,7 +5374,10 @@ export default function App() {
             GET INVOLVED
           </SectionHeading>
 
-        <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${visibleParticipationKeys.length >= 3 ? 'lg:grid-cols-' + visibleParticipationKeys.length : ''}`}>
+        <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${
+          visibleParticipationKeys.length >= 4 ? 'lg:grid-cols-4' :
+          visibleParticipationKeys.length === 3 ? 'lg:grid-cols-3' : ''
+        }`}>
             {visibleParticipationKeys.map((key, idx) => (
               <motion.div
                 key={key}
@@ -5366,7 +5397,7 @@ export default function App() {
         </div>
       </section>
 
-      <SponsorshipSection sponsors={sponsors} sponsorshipOpen={sponsorshipOpen} />
+      {sponsorshipState !== 'hidden' && <SponsorshipSection sponsors={sponsors} state={sponsorshipState} />}
       <ContributionSection />
 
       {/* Footer */}

@@ -199,6 +199,7 @@ function is_public_setting_key(string $key): bool {
         'tagline',
         'show_meetings_section',
         'sponsorship_open',
+        'sponsorship_state',
     ];
 
     if (in_array($key, $exact, true)) return true;

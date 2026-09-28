@@ -1,8 +1,27 @@
 # Publish Taos Pride to GoDaddy
 
 The React source files cannot be uploaded directly. Vite first compiles them
-into browser-ready HTML, CSS, and JavaScript. The project now builds and packages
-everything needed for cPanel with one command.
+into browser-ready HTML, CSS, and JavaScript. GitHub can now do that work for
+you, so publishing does not require React, Node, or Terminal on your computer.
+
+## Build it on GitHub—no software required
+
+Every change pushed to `main` automatically creates a fresh cPanel package.
+
+1. Open [Build cPanel package on GitHub](https://github.com/Nrico/taospride/actions/workflows/build-cpanel-package.yml).
+2. Open the newest successful run (the one with a green checkmark).
+3. Find **Artifacts** at the bottom and download **taospride-cpanel**.
+4. Unzip that download once. Inside it is `taospride-cpanel.zip`, which is the
+   file to upload to GoDaddy.
+
+To rebuild without changing the site, use **Run workflow** on that same GitHub
+page. GitHub keeps each downloadable artifact for 30 days.
+
+Continue with **Upload with cPanel File Manager** below.
+
+## Optional local build
+
+If Node and npm are installed, you can still make the same package locally.
 
 ## Make the upload package
 

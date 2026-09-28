@@ -1,0 +1,55 @@
+name: Build cPanel package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpanel-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build upload-ready ZIP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the site
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Check TypeScript
+        run: npm run lint
+
+      - name: Build cPanel package
+        run: npm run release
+
+      - name: Verify private files are excluded
+        run: |
+          if unzip -Z1 release/taospride-cpanel.zip | grep -Eq '(^|/)config\.php$|(^|/)gallery-photos/|\.DS_Store$'; then
+            echo 'The release contains a private or unwanted file.' >&2
+            exit 1
+          fi
+
+      - name: Save downloadable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: taospride-cpanel
+          path: |
+            release/taospride-cpanel.zip
+            release/UPLOAD-INSTRUCTIONS.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

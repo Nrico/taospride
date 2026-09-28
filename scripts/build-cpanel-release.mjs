@@ -7,6 +7,7 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const releaseDir = join(projectRoot, 'release');
 const publicHtmlDir = join(releaseDir, 'public_html');
 const archivePath = join(releaseDir, 'taospride-cpanel.zip');
+const migrationPath = join(releaseDir, 'RUN-IN-PHPMYADMIN.sql');
 
 const run = (command, args, options = {}) => {
   const result = spawnSync(command, args, {
@@ -56,13 +57,16 @@ const instructions = `TAOS PRIDE CPANEL RELEASE
 
 Created: ${new Date().toISOString()}
 
-1. Sign in to GoDaddy cPanel and open File Manager.
-2. Open public_html.
-3. Upload taospride-cpanel.zip into public_html.
-4. Select the ZIP and choose Extract. Extract into public_html itself.
-5. Confirm overwrite when cPanel asks.
-6. Delete the uploaded ZIP from the server after extraction.
-7. Visit https://taospride.org and https://taospride.org/api/health.
+1. Back up the production database.
+2. In phpMyAdmin, run RUN-IN-PHPMYADMIN.sql once. Never run it twice.
+3. Complete the password-hash migration described in DEPLOY.md if it has not
+   already been completed.
+4. In cPanel File Manager, open public_html.
+5. Upload taospride-cpanel.zip into public_html.
+6. Select the ZIP and choose Extract. Extract into public_html itself.
+7. Confirm overwrite when cPanel asks.
+8. Delete the uploaded ZIP from the server after extraction.
+9. Visit https://taospride.org and https://taospride.org/api/health.
 
 This package deliberately excludes:
 - api/config.php (production database credentials)
@@ -75,6 +79,10 @@ Do not delete public_html or the existing api/config.php before extracting.
 `;
 
 await writeFile(join(releaseDir, 'UPLOAD-INSTRUCTIONS.txt'), instructions);
+await copy(
+  join(projectRoot, 'database', 'migrations', '2026-09-28-event-lifecycle.sql'),
+  migrationPath,
+);
 
 // The ZIP contains the contents of public_html at its root, so extracting it
 // while inside cPanel's public_html directory puts every file in the right spot.
@@ -83,4 +91,5 @@ run('zip', ['-r', '-q', archivePath, '.'], { cwd: publicHtmlDir });
 console.log('Release ready:');
 console.log(`  ${archivePath}`);
 console.log(`  ${join(releaseDir, 'UPLOAD-INSTRUCTIONS.txt')}`);
+console.log(`  ${migrationPath}`);
 console.log('\nThe live api/config.php and uploaded photos are not in the ZIP and will not be overwritten.\n');

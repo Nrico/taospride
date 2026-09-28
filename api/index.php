@@ -51,6 +51,11 @@ try {
             handle_settings($method);
             break;
 
+        // --- Festival / event series ---
+        case 'event-series':
+            handle_event_series($method, $id);
+            break;
+
         // --- Events ---
         case 'events':
             if (($parts[1] ?? '') === 'reorder') { handle_events_reorder($method); break; }
@@ -239,26 +244,135 @@ function handle_settings(string $method): void {
 // ============================================================
 // EVENTS
 // ============================================================
+function sql_datetime(mixed $value): ?string {
+    if ($value === null || $value === '') return null;
+    return substr(str_replace('T', ' ', (string) $value), 0, 19);
+}
+
+function slugify(string $value): string {
+    $slug = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '-', $value), '-'));
+    return $slug !== '' ? $slug : 'series';
+}
+
+function unique_series_slug(PDO $db, string $title, ?int $excludeId = null): string {
+    $base = slugify($title);
+    $slug = $base;
+    $i = 2;
+    while (true) {
+        $sql = 'SELECT id FROM event_series WHERE slug = ?' . ($excludeId !== null ? ' AND id <> ?' : '');
+        $st = $db->prepare($sql);
+        $st->execute($excludeId !== null ? [$slug, $excludeId] : [$slug]);
+        if (!$st->fetch()) return $slug;
+        $slug = $base . '-' . $i++;
+    }
+}
+
+function series_row(array $row): array {
+    $r = camel($row);
+    $r['id'] = (int) $row['id'];
+    $r['featured'] = (bool) ($row['featured'] ?? false);
+    return $r;
+}
+
+function handle_event_series(string $method, ?int $id): void {
+    $db = db();
+
+    if ($method === 'GET') {
+        $admin = ($_GET['admin'] ?? '') === '1';
+        if ($admin) require_auth();
+
+        if ($id !== null) {
+            $sql = 'SELECT * FROM event_series WHERE id = ?';
+            if (!$admin) $sql .= " AND publication_status = 'published'";
+            $st = $db->prepare($sql);
+            $st->execute([$id]);
+            $row = $st->fetch();
+            if (!$row) error_response('Event series not found', 404);
+            json_response(series_row($row));
+        }
+
+        $where = $admin ? '' : "WHERE publication_status = 'published'";
+        $rows = $db->query("SELECT * FROM event_series {$where} ORDER BY featured DESC, start_at DESC, id DESC")->fetchAll();
+        json_response(array_map('series_row', $rows));
+    }
+
+    if ($method === 'POST') {
+        require_auth();
+        $b = body();
+        $title = trim((string) ($b['title'] ?? ''));
+        if ($title === '') error_response('Series title is required', 422);
+        $slug = unique_series_slug($db, $title);
+        $st = $db->prepare('INSERT INTO event_series
+            (title,slug,series_type,start_at,end_at,timezone,description,publication_status,featured)
+            VALUES (?,?,?,?,?,?,?,?,?)');
+        $st->execute([
+            $title, $slug, $b['seriesType'] ?? 'festival', sql_datetime($b['startAt'] ?? null),
+            sql_datetime($b['endAt'] ?? null), $b['timezone'] ?? 'America/Denver',
+            $b['description'] ?? null, $b['publicationStatus'] ?? 'draft', (int) ($b['featured'] ?? 0),
+        ]);
+        $newId = (int) $db->lastInsertId();
+        $row = $db->query('SELECT * FROM event_series WHERE id = ' . $newId)->fetch();
+        json_response(series_row($row), 201);
+    }
+
+    if ($method === 'PUT' && $id !== null) {
+        require_auth();
+        $b = body();
+        $title = trim((string) ($b['title'] ?? ''));
+        if ($title === '') error_response('Series title is required', 422);
+        $slug = unique_series_slug($db, $title, $id);
+        $st = $db->prepare('UPDATE event_series SET
+            title=?,slug=?,series_type=?,start_at=?,end_at=?,timezone=?,description=?,publication_status=?,featured=?
+            WHERE id=?');
+        $st->execute([
+            $title, $slug, $b['seriesType'] ?? 'festival', sql_datetime($b['startAt'] ?? null),
+            sql_datetime($b['endAt'] ?? null), $b['timezone'] ?? 'America/Denver',
+            $b['description'] ?? null, $b['publicationStatus'] ?? 'draft', (int) ($b['featured'] ?? 0), $id,
+        ]);
+        $st2 = $db->prepare('SELECT * FROM event_series WHERE id = ?');
+        $st2->execute([$id]);
+        $row = $st2->fetch();
+        if (!$row) error_response('Event series not found', 404);
+        json_response(series_row($row));
+    }
+
+    if ($method === 'DELETE' && $id !== null) {
+        require_auth();
+        $db->prepare('DELETE FROM event_series WHERE id = ?')->execute([$id]);
+        json_response(['success' => true]);
+    }
+
+    error_response('Method not allowed', 405);
+}
+
 function event_row(array $row): array {
-    $bool_fields = ['insuranceRequired'];
     $r = camel($row);
     $r['insuranceRequired'] = (bool)($row['insurance_required'] ?? false);
+    $r['featured']          = (bool)($row['featured'] ?? false);
+    $r['seriesId']          = isset($row['series_id']) ? (int) $row['series_id'] : null;
     $r['sortOrder']         = (int)($row['sort_order'] ?? 0);
     return $r;
 }
 
 function handle_events(string $method, ?int $id): void {
     $db = db();
+    $select = 'SELECT e.*, s.title AS series_title, s.slug AS series_slug
+               FROM events e LEFT JOIN event_series s ON s.id = e.series_id';
 
     if ($method === 'GET') {
+        $admin = ($_GET['admin'] ?? '') === '1';
+        if ($admin) require_auth();
         if ($id !== null) {
-            $st = $db->prepare('SELECT * FROM events WHERE id = ?');
+            $sql = $select . ' WHERE e.id = ?';
+            if (!$admin) $sql .= " AND e.publication_status = 'published' AND (e.series_id IS NULL OR s.publication_status = 'published')";
+            $st = $db->prepare($sql);
             $st->execute([$id]);
             $row = $st->fetch();
             if (!$row) { error_response('Event not found', 404); }
             json_response(event_row($row));
         }
-        $rows = $db->query('SELECT * FROM events ORDER BY sort_order ASC, id ASC')->fetchAll();
+        $where = $admin ? '' : "WHERE e.publication_status = 'published' AND (e.series_id IS NULL OR s.publication_status = 'published')";
+        $rows = $db->query($select . " {$where} ORDER BY e.start_at IS NULL, e.start_at ASC, e.sort_order ASC, e.id ASC")->fetchAll();
         json_response(array_map('event_row', $rows));
     }
 
@@ -266,13 +380,17 @@ function handle_events(string $method, ?int $id): void {
         require_auth();
         $b = body();
         $st = $db->prepare('INSERT INTO events
-            (title,status,icon_key,color,event_date,event_date_sort,event_time,location,location_details,description,teaser_text,ticket_link,ticket_price,
+            (series_id,title,event_type,start_at,end_at,timezone,publication_status,featured,
+             status,icon_key,color,event_date,event_date_sort,event_time,location,location_details,description,teaser_text,ticket_link,ticket_price,
              venue_contact_name,venue_contact_email,venue_contact_phone,venue_contract_url,
              insurance_required,insurance_carrier,insurance_policy_num,insurance_expiry,insurance_amount,insurance_notes,
              estimated_attendance,hero_image,flyer_image,extra_image,extra_image_label,sort_order)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
         $st->execute([
-            $b['title'] ?? 'New Event', $b['status'] ?? 'TBD', $b['iconKey'] ?? 'Heart', $b['color'] ?? '#E91E63',
+            $b['seriesId'] ?? null, $b['title'] ?? 'New Event', $b['eventType'] ?? null,
+            sql_datetime($b['startAt'] ?? null), sql_datetime($b['endAt'] ?? null), $b['timezone'] ?? 'America/Denver',
+            $b['publicationStatus'] ?? 'draft', (int) ($b['featured'] ?? 0),
+            $b['status'] ?? 'TBD', $b['iconKey'] ?? 'Heart', $b['color'] ?? '#E91E63',
             $b['eventDate'] ?? null, $b['eventDateSort'] ?? null, $b['eventTime'] ?? null, $b['location'] ?? null, $b['locationDetails'] ?? null,
             $b['description'] ?? null, $b['teaserText'] ?? null, $b['ticketLink'] ?? null, $b['ticketPrice'] ?? null,
             $b['venueContactName'] ?? null, $b['venueContactEmail'] ?? null, $b['venueContactPhone'] ?? null, $b['venueContractUrl'] ?? null,
@@ -283,7 +401,7 @@ function handle_events(string $method, ?int $id): void {
             $b['sortOrder'] ?? 0
         ]);
         $newId = (int)$db->lastInsertId();
-        $st2 = $db->prepare('SELECT * FROM events WHERE id = ?');
+        $st2 = $db->prepare($select . ' WHERE e.id = ?');
         $st2->execute([$newId]);
         json_response(event_row($st2->fetch()), 201);
     }
@@ -292,14 +410,18 @@ function handle_events(string $method, ?int $id): void {
         require_auth();
         $b = body();
         $st = $db->prepare('UPDATE events SET
-            title=?,status=?,icon_key=?,color=?,event_date=?,event_date_sort=?,event_time=?,location=?,location_details=?,
+            series_id=?,title=?,event_type=?,start_at=?,end_at=?,timezone=?,publication_status=?,featured=?,
+            status=?,icon_key=?,color=?,event_date=?,event_date_sort=?,event_time=?,location=?,location_details=?,
             description=?,teaser_text=?,ticket_link=?,ticket_price=?,
             venue_contact_name=?,venue_contact_email=?,venue_contact_phone=?,venue_contract_url=?,
             insurance_required=?,insurance_carrier=?,insurance_policy_num=?,insurance_expiry=?,insurance_amount=?,insurance_notes=?,
             estimated_attendance=?,hero_image=?,flyer_image=?,extra_image=?,extra_image_label=?,sort_order=?
             WHERE id=?');
         $st->execute([
-            $b['title'] ?? '', $b['status'] ?? 'TBD', $b['iconKey'] ?? 'Heart', $b['color'] ?? '#E91E63',
+            $b['seriesId'] ?? null, $b['title'] ?? '', $b['eventType'] ?? null,
+            sql_datetime($b['startAt'] ?? null), sql_datetime($b['endAt'] ?? null), $b['timezone'] ?? 'America/Denver',
+            $b['publicationStatus'] ?? 'draft', (int) ($b['featured'] ?? 0),
+            $b['status'] ?? 'TBD', $b['iconKey'] ?? 'Heart', $b['color'] ?? '#E91E63',
             $b['eventDate'] ?? null, $b['eventDateSort'] ?? null, $b['eventTime'] ?? null, $b['location'] ?? null, $b['locationDetails'] ?? null,
             $b['description'] ?? null, $b['teaserText'] ?? null, $b['ticketLink'] ?? null, $b['ticketPrice'] ?? null,
             $b['venueContactName'] ?? null, $b['venueContactEmail'] ?? null, $b['venueContactPhone'] ?? null, $b['venueContractUrl'] ?? null,
@@ -310,7 +432,7 @@ function handle_events(string $method, ?int $id): void {
             $b['sortOrder'] ?? 0,
             $id
         ]);
-        $st2 = $db->prepare('SELECT * FROM events WHERE id = ?');
+        $st2 = $db->prepare($select . ' WHERE e.id = ?');
         $st2->execute([$id]);
         json_response(event_row($st2->fetch()));
     }

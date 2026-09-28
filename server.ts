@@ -60,10 +60,19 @@ async function startServer() {
   });
 
   // ── Settings ──────────────────────────────────────────────────────────────
+  const isPublicSettingKey = (key: string) => [
+    "phase", "event_year", "festival_start", "festival_end", "tagline",
+    "show_meetings_section", "sponsorship_open",
+  ].includes(key)
+    || /^hero_(planning|active|live)_(image|line1|line2|sub|ctaLabel|ctaHref)$/.test(key)
+    || /^participate_(volunteer|vendor|performer|parade)$/.test(key);
+
   app.get("/api/settings", async (_req, res) => {
     const raw = await readJSON("settings");
     const out: Record<string, string> = {};
-    for (const row of raw) out[row.setting_key] = row.setting_value;
+    for (const row of raw) {
+      if (isPublicSettingKey(row.setting_key)) out[row.setting_key] = row.setting_value;
+    }
     // Defaults if file doesn't exist yet
     if (!out.phase) out.phase = "LIVE_EVENT";
     res.json(out);
@@ -73,24 +82,91 @@ async function startServer() {
     const existing = await readJSON("settings");
     const map: Record<string, string> = {};
     for (const r of existing) map[r.setting_key] = r.setting_value;
-    for (const [k, v] of Object.entries(req.body)) map[k] = v as string;
+    for (const [k, v] of Object.entries(req.body)) {
+      if (isPublicSettingKey(k)) map[k] = v as string;
+    }
     const rows = Object.entries(map).map(([k, v]) => ({ setting_key: k, setting_value: v }));
     await writeJSON("settings", rows);
     res.json({ success: true });
   });
 
   // ── Events ────────────────────────────────────────────────────────────────
-  app.get("/api/events", async (_req, res) => {
+  app.get("/api/event-series", async (req, res) => {
+    const series = await readJSON("event-series");
+    const visible = req.query.admin === "1"
+      ? series
+      : series.filter((s: any) => (s.publicationStatus ?? "published") === "published");
+    visible.sort((a: any, b: any) => Number(b.featured ?? 0) - Number(a.featured ?? 0)
+      || String(b.startAt ?? "").localeCompare(String(a.startAt ?? "")));
+    res.json(visible);
+  });
+
+  app.post("/api/event-series", async (req, res) => {
+    const series = await readJSON("event-series");
+    const newSeries = {
+      id: Date.now().toString(),
+      timezone: "America/Denver",
+      publicationStatus: "draft",
+      featured: false,
+      ...req.body,
+    };
+    series.push(newSeries);
+    await writeJSON("event-series", series);
+    res.status(201).json(newSeries);
+  });
+
+  app.put("/api/event-series/:id", async (req, res) => {
+    const series = await readJSON("event-series");
+    const idx = series.findIndex((s) => String(s.id) === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: "Not found" });
+    series[idx] = { ...series[idx], ...req.body, id: series[idx].id };
+    await writeJSON("event-series", series);
+    res.json(series[idx]);
+  });
+
+  app.delete("/api/event-series/:id", async (req, res) => {
+    const series = await readJSON("event-series");
+    await writeJSON("event-series", series.filter((s) => String(s.id) !== req.params.id));
+    const events = await readJSON("events");
+    for (const event of events) {
+      if (String(event.seriesId) === req.params.id) event.seriesId = null;
+    }
+    await writeJSON("events", events);
+    res.json({ success: true });
+  });
+
+  app.get("/api/events", async (req, res) => {
     // Mirrors api/index.php's `ORDER BY sort_order ASC, id ASC` — the mock
     // JSON store's array order isn't otherwise meaningful.
     const events = await readJSON("events");
-    events.sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || String(a.id).localeCompare(String(b.id)));
-    res.json(events);
+    const series = await readJSON("event-series");
+    const seriesById = new Map(series.map((s: any) => [String(s.id), s]));
+    const visible = req.query.admin === "1"
+      ? events
+      : events.filter((e: any) => {
+          if ((e.publicationStatus ?? "published") !== "published") return false;
+          if (!e.seriesId) return true;
+          return (seriesById.get(String(e.seriesId))?.publicationStatus ?? "published") === "published";
+        });
+    visible.sort((a: any, b: any) => String(a.startAt ?? a.eventDateSort ?? "9999").localeCompare(String(b.startAt ?? b.eventDateSort ?? "9999"))
+      || (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      || String(a.id).localeCompare(String(b.id)));
+    res.json(visible.map((event: any) => {
+      const parent = event.seriesId ? seriesById.get(String(event.seriesId)) : null;
+      const normalized = { publicationStatus: "published", featured: false, timezone: "America/Denver", ...event };
+      return parent ? { ...normalized, seriesTitle: parent.title, seriesSlug: parent.slug } : normalized;
+    }));
   });
 
   app.post("/api/events", async (req, res) => {
     const events = await readJSON("events");
-    const newEvent = { id: Date.now().toString(), ...req.body };
+    const newEvent = {
+      id: Date.now().toString(),
+      timezone: "America/Denver",
+      publicationStatus: "draft",
+      featured: false,
+      ...req.body,
+    };
     events.push(newEvent);
     await writeJSON("events", events);
     res.status(201).json(newEvent);

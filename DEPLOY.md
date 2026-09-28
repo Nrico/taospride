@@ -298,6 +298,12 @@ Upload only the changed `.php` file inside `api/` — no build step needed.
 Run the `ALTER TABLE` or `CREATE TABLE` statement directly in phpMyAdmin → SQL tab.
 **Never re-import the full `schema.sql` against an existing database** — it will conflict with live data.
 
+**Event series and automatic lifecycle migration:** for the release that adds
+festival grouping, start/end times, drafts, and automatic past events, back up
+the database and run `database/migrations/2026-09-28-event-lifecycle.sql` once
+before uploading the matching PHP/frontend package. The generated release also
+includes this as `RUN-IN-PHPMYADMIN.sql`.
+
 **If you're updating an already-live site to get event sorting**, run this once (new installs
 get it automatically via `schema.sql`):
 ```sql

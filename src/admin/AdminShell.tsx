@@ -23,7 +23,7 @@ import {
 } from '../App';
 import type {
   SitePhase, EventData, Meeting, Sponsor, PhotoAlbum, HeroSettings,
-  ParticipationTypeKey, ParticipationConfig,
+  ParticipationTypeKey, ParticipationConfig, EventSeries,
 } from '../App';
 
 // ============================================================
@@ -34,6 +34,7 @@ import type {
 function useAdminData() {
   const [phase, setPhase] = useState<SitePhase>('PLANNING');
   const [events, setEvents] = useState<EventData[]>([]);
+  const [eventSeries, setEventSeries] = useState<EventSeries[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
   const [albums, setAlbums] = useState<PhotoAlbum[]>([]);
@@ -42,8 +43,9 @@ function useAdminData() {
 
   const refresh = async () => {
     try {
-      const [dataE, dataM, dataS, dataP, settings] = await Promise.all([
-        adminApi.get('/api/events'),
+      const [dataE, dataSeries, dataM, dataS, dataP, settings] = await Promise.all([
+        adminApi.get('/api/events?admin=1'),
+        adminApi.get('/api/event-series?admin=1'),
         adminApi.get('/api/meetings'),
         adminApi.get('/api/sponsors'),
         adminApi.get('/api/photos'),
@@ -51,6 +53,7 @@ function useAdminData() {
       ]);
 
       setEvents(dataE || []);
+      setEventSeries(dataSeries || []);
       setMeetings(dataM || []);
       setSponsors(dataS || []);
       setAlbums(dataP || []);
@@ -87,7 +90,7 @@ function useAdminData() {
   useEffect(() => { refresh(); }, []);
 
   return {
-    phase, setPhase, events, meetings, sponsors, albums,
+    phase, setPhase, events, eventSeries, meetings, sponsors, albums,
     heroSettings, setHeroSettings, participationConfigs, setParticipationConfigs,
     refresh,
   };
@@ -209,7 +212,7 @@ function AdminAuthedShell({ onLogout }: { onLogout: () => void }) {
         <Routes>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<AdminDashboard events={data.events} meetings={data.meetings} sponsors={data.sponsors} />} />
-          <Route path="events" element={<EventsTab events={data.events} onRefresh={data.refresh} />} />
+          <Route path="events" element={<EventsTab events={data.events} series={data.eventSeries} onRefresh={data.refresh} />} />
           <Route path="meetings" element={<MeetingsTab meetings={data.meetings} onRefresh={data.refresh} />} />
           <Route path="applications" element={<ApplicationsViewer />} />
           <Route path="sponsors" element={<SponsorsAdmin sponsors={data.sponsors} onRefresh={data.refresh} />} />

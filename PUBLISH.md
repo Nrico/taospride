@@ -35,6 +35,7 @@ When it finishes, open the new `release` folder. It contains:
 
 - `taospride-cpanel.zip` — upload this file to GoDaddy.
 - `UPLOAD-INSTRUCTIONS.txt` — the short cPanel checklist.
+- `RUN-IN-PHPMYADMIN.sql` — included when a release needs a database update.
 - `public_html/` — the same files unpacked, useful for inspection or FTP.
 
 ## Upload with cPanel File Manager
@@ -57,3 +58,7 @@ before extracting the package; those server-only files must remain in place.
 When deploying the hash-only authentication update, complete the password-hash
 database migration in `DEPLOY.md` before extracting the new package. This avoids
 locking administrators out between the database and PHP updates.
+
+The event-lifecycle release also requires `RUN-IN-PHPMYADMIN.sql`. Back up the
+database, open phpMyAdmin's **SQL** tab, and run that file once before extracting
+the corresponding cPanel ZIP. Do not run the migration more than once.

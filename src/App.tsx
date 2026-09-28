@@ -32,18 +32,37 @@ import {
   Image as ImageIcon,
   Upload,
   Trash2,
-  ChevronUp,
-  ChevronDown,
-  ArrowDownWideNarrow,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Types ---
 export type SitePhase = 'PLANNING' | 'ACTIVE_PLANNING' | 'LIVE_EVENT';
 
+export interface EventSeries {
+  id: number | string;
+  title: string;
+  slug?: string;
+  seriesType: 'festival' | 'community' | 'other';
+  startAt?: string;
+  endAt?: string;
+  timezone?: string;
+  description?: string;
+  publicationStatus: 'draft' | 'published' | 'archived';
+  featured: boolean;
+}
+
 export interface EventData {
   id: string;
+  seriesId?: number | null;
+  seriesTitle?: string;
+  seriesSlug?: string;
   title: string;
+  eventType?: string;
+  startAt?: string;
+  endAt?: string;
+  timezone?: string;
+  publicationStatus?: 'draft' | 'published' | 'cancelled' | 'archived';
+  featured?: boolean;
   date?: string;        // display string e.g. "August 15, 2026"
   eventDate?: string;   // same field, camelCase from PHP API
   eventDateSort?: string; // real ISO date (YYYY-MM-DD), used for automatic chronological ordering — event_date/date above stay freeform for display
@@ -77,6 +96,51 @@ export interface EventData {
   extraImage?: string;
   extraImageLabel?: string;
 }
+
+const toDateTimeInput = (value?: string) => value ? value.replace(' ', 'T').slice(0, 16) : '';
+
+const eventChronologyKey = (event: EventData) =>
+  event.startAt?.replace('T', ' ') || (event.eventDateSort ? `${event.eventDateSort} 00:00:00` : '9999-12-31 23:59:59');
+
+const eventEndKey = (event: EventData) =>
+  event.endAt?.replace('T', ' ') || event.startAt?.replace('T', ' ') || (event.eventDateSort ? `${event.eventDateSort} 23:59:59` : null);
+
+const mountainNowKey = () => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+};
+
+const parseWallClock = (value?: string) => {
+  if (!value) return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]));
+};
+
+const eventDateLabel = (event: EventData) => {
+  if (event.date || event.eventDate) return event.date || event.eventDate || '';
+  const start = parseWallClock(event.startAt);
+  const end = parseWallClock(event.endAt);
+  if (!start) return 'Date TBD';
+  const startLabel = start.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  if (end && end.toDateString() !== start.toDateString()) {
+    return `${startLabel} – ${end.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+  }
+  return startLabel;
+};
+
+const eventTimeLabel = (event: EventData) => {
+  if (event.time || event.eventTime) return event.time || event.eventTime || '';
+  const start = parseWallClock(event.startAt);
+  const end = parseWallClock(event.endAt);
+  if (!start) return 'Time TBD';
+  const format = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return end ? `${format(start)} – ${format(end)}` : format(start);
+};
 
 interface Performer {
   id: number;
@@ -765,10 +829,12 @@ const selectCls = "w-full bg-white border-2 border-gray-200 focus:border-pink-50
 // ── Batch 3: EventEditor ──────────────────────────────────────────────────────
 type EventEditorTab = 'info' | 'images' | 'performers' | 'budget' | 'materials' | 'staffing' | 'marketing';
 
-const EventEditor = ({ event, onSave, onDelete }: {
+const EventEditor = ({ event, series, onSave, onDelete, onDuplicate }: {
   event: EventData;
+  series: EventSeries[];
   onSave: () => void;
   onDelete: () => void | Promise<void>;
+  onDuplicate: () => void | Promise<void>;
   key?: React.Key;
 }) => {
   const [tab, setTab]           = useState<EventEditorTab>('info');
@@ -793,6 +859,10 @@ const EventEditor = ({ event, onSave, onDelete }: {
   const set = (key: keyof EventData, val: any) => setForm(f => ({ ...f, [key]: val }));
 
   const saveInfo = async () => {
+    if (form.endAt && form.startAt && form.endAt < form.startAt) {
+      alert('The event end must be after its start.');
+      return;
+    }
     setSaving(true);
     try {
       // Normalize: form uses `date`/`time` but the PHP API column names
@@ -801,7 +871,10 @@ const EventEditor = ({ event, onSave, onDelete }: {
       const payload = {
         ...form,
         eventDate: form.date || form.eventDate || null,
+        eventDateSort: form.startAt ? form.startAt.slice(0, 10) : (form.eventDateSort || null),
         eventTime: form.time || form.eventTime || null,
+        startAt: form.startAt || null,
+        endAt: form.endAt || null,
       };
       await api.put(`/api/events/${event.id}`, payload);
       onSave();
@@ -828,9 +901,10 @@ const EventEditor = ({ event, onSave, onDelete }: {
         <div className="w-4 h-4 rounded-full shrink-0 border border-gray-300" style={{ backgroundColor: form.color }} />
         <span className="font-black text-lg tracking-tight flex-1 truncate">{form.title || 'Untitled Event'}</span>
         <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded ${
-          form.status === 'CONFIRMED' ? 'bg-green-100 text-green-700' :
-          form.status === 'TEASER'    ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500'
-        }`}>{form.status}</span>
+          form.publicationStatus === 'published' ? 'bg-green-100 text-green-700' :
+          form.publicationStatus === 'cancelled' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'
+        }`}>{form.publicationStatus || 'draft'}</span>
+        <button onClick={onDuplicate} className="text-gray-400 hover:text-pink-500 transition-colors text-xs font-bold uppercase">Duplicate</button>
         <button onClick={onDelete} className="text-gray-300 hover:text-red-500 transition-colors text-xs font-bold uppercase">Delete</button>
       </div>
 
@@ -857,6 +931,35 @@ const EventEditor = ({ event, onSave, onDelete }: {
                   <input className={inputCls} value={form.title || ''} onChange={e => set('title', e.target.value)} />
                 </Field>
               </div>
+              <Field label="Publication">
+                <select className={selectCls} value={form.publicationStatus || 'draft'} onChange={e => set('publicationStatus', e.target.value as EventData['publicationStatus'])}>
+                  <option value="draft">Draft — admin only</option>
+                  <option value="published">Published</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </Field>
+              <Field label="Festival / Series">
+                <select className={selectCls} value={form.seriesId ?? ''} onChange={e => set('seriesId', e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">Standalone year-round event</option>
+                  {series.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+                </select>
+              </Field>
+              <Field label="Starts">
+                <input className={inputCls} type="datetime-local" value={toDateTimeInput(form.startAt)} onChange={e => set('startAt', e.target.value)} />
+              </Field>
+              <Field label="Ends">
+                <input className={inputCls} type="datetime-local" min={toDateTimeInput(form.startAt)} value={toDateTimeInput(form.endAt)} onChange={e => set('endAt', e.target.value)} />
+              </Field>
+              <Field label="Event Type">
+                <input className={inputCls} placeholder="Festival, fundraiser, social…" value={form.eventType || ''} onChange={e => set('eventType', e.target.value)} />
+              </Field>
+              <div className="flex items-end pb-2">
+                <label className="flex items-center gap-3 text-sm font-bold text-gray-700 cursor-pointer">
+                  <input type="checkbox" checked={!!form.featured} onChange={e => set('featured', e.target.checked)} className="w-4 h-4 accent-pink-500" />
+                  Feature this event
+                </label>
+              </div>
               <Field label="Status">
                 <select className={selectCls} value={form.status} onChange={e => set('status', e.target.value as any)}>
                   {['TBD','TEASER','CONFIRMED'].map(s => <option key={s}>{s}</option>)}
@@ -867,20 +970,12 @@ const EventEditor = ({ event, onSave, onDelete }: {
                   {Object.keys(ICON_MAP).map(k => <option key={k}>{k}</option>)}
                 </select>
               </Field>
-              <Field label="Date (display)">
+              <Field label="Date display override (optional)">
                 <input className={inputCls} placeholder="e.g. August 15, 2026" value={form.date || form.eventDate || ''} onChange={e => set('date', e.target.value)} />
               </Field>
-              <Field label="Time">
+              <Field label="Time display override (optional)">
                 <input className={inputCls} placeholder="e.g. 6:00 PM – 10:00 PM" value={form.time || form.eventTime || ''} onChange={e => set('time', e.target.value)} />
               </Field>
-              <div className="col-span-2">
-                <Field label="Date (for sorting)">
-                  <input className={inputCls} type="date" value={form.eventDateSort || ''} onChange={e => set('eventDateSort', e.target.value)} />
-                  <p className="text-[11px] text-gray-400 mt-1">
-                    Used by "Sort by Date" in the events list. Doesn't change what visitors see — that's the display date above. Leave blank for TBD events; they'll sort last.
-                  </p>
-                </Field>
-              </div>
               <Field label="Color (hex)">
                 <div className="flex gap-2">
                   <input type="color" value={form.color || '#E91E63'} onChange={e => set('color', e.target.value)} className="h-9 w-12 border-2 border-gray-200 cursor-pointer bg-white p-0.5" />
@@ -1516,15 +1611,106 @@ const MarketingPanel = ({ eventId }: { eventId: string }) => {
   );
 };
 
+const emptySeries = (): EventSeries => ({
+  id: '', title: '', seriesType: 'festival', timezone: 'America/Denver',
+  publicationStatus: 'draft', featured: false, description: '', startAt: '', endAt: '',
+});
+
+const EventSeriesManager = ({ series, onRefresh }: { series: EventSeries[]; onRefresh: () => void }) => {
+  const [editing, setEditing] = useState<EventSeries | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!editing?.title.trim()) return;
+    if (editing.endAt && editing.startAt && editing.endAt < editing.startAt) {
+      alert('The series end must be after its start.');
+      return;
+    }
+    setSaving(true);
+    try {
+      if (editing.id) await api.put(`/api/event-series/${editing.id}`, editing);
+      else await api.post('/api/event-series', editing);
+      setEditing(null);
+      await onRefresh();
+    } finally { setSaving(false); }
+  };
+
+  const remove = async () => {
+    if (!editing?.id || !window.confirm(`Delete “${editing.title}”? Its events will become standalone events.`)) return;
+    await api.del(`/api/event-series/${editing.id}`);
+    setEditing(null);
+    onRefresh();
+  };
+
+  return (
+    <details className="mb-6 bg-white border border-gray-200 rounded-2xl shadow-sm">
+      <summary className="cursor-pointer list-none px-6 py-4 flex items-center justify-between gap-4">
+        <div>
+          <p className="font-black text-gray-900">Festivals &amp; Event Series</p>
+          <p className="text-xs text-gray-400">Group annual Pride schedules while keeping year-round events independent.</p>
+        </div>
+        <span className="text-xs font-bold text-pink-500">{series.length} series · Manage</span>
+      </summary>
+      <div className="border-t border-gray-100 p-6 grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-6">
+        <div className="space-y-2">
+          <button onClick={() => setEditing(emptySeries())} className="w-full py-2.5 bg-gray-900 text-white rounded-xl text-xs font-bold">+ New Series</button>
+          {series.map(s => (
+            <button key={s.id} onClick={() => setEditing({ ...s })}
+              className={`w-full text-left p-3 rounded-xl border ${String(editing?.id) === String(s.id) ? 'border-pink-500 bg-pink-50' : 'border-gray-200'}`}>
+              <p className="text-sm font-bold text-gray-900">{s.title}</p>
+              <p className="text-[10px] uppercase tracking-widest text-gray-400">{s.publicationStatus}{s.featured ? ' · featured' : ''}</p>
+            </button>
+          ))}
+        </div>
+        {editing ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2"><Field label="Series title"><input className={inputCls} value={editing.title} onChange={e => setEditing({ ...editing, title: e.target.value })} placeholder="Taos Pride 2027" /></Field></div>
+            <Field label="Type"><select className={selectCls} value={editing.seriesType} onChange={e => setEditing({ ...editing, seriesType: e.target.value as EventSeries['seriesType'] })}><option value="festival">Pride festival</option><option value="community">Community series</option><option value="other">Other</option></select></Field>
+            <Field label="Publication"><select className={selectCls} value={editing.publicationStatus} onChange={e => setEditing({ ...editing, publicationStatus: e.target.value as EventSeries['publicationStatus'] })}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></Field>
+            <Field label="Starts"><input className={inputCls} type="datetime-local" value={toDateTimeInput(editing.startAt)} onChange={e => setEditing({ ...editing, startAt: e.target.value })} /></Field>
+            <Field label="Ends"><input className={inputCls} type="datetime-local" value={toDateTimeInput(editing.endAt)} onChange={e => setEditing({ ...editing, endAt: e.target.value })} /></Field>
+            <div className="md:col-span-2"><Field label="Description"><textarea className={inputCls + ' h-20 resize-none'} value={editing.description || ''} onChange={e => setEditing({ ...editing, description: e.target.value })} /></Field></div>
+            <label className="flex items-center gap-3 text-sm font-bold text-gray-700"><input type="checkbox" checked={editing.featured} onChange={e => setEditing({ ...editing, featured: e.target.checked })} className="w-4 h-4 accent-pink-500" /> Featured festival</label>
+            <div className="flex justify-end gap-2">
+              {editing.id && <button onClick={remove} className="px-4 py-2 text-xs font-bold text-red-500">Delete</button>}
+              <button onClick={save} disabled={saving || !editing.title.trim()} className="px-5 py-2 bg-pink-500 text-white rounded-lg text-xs font-bold disabled:opacity-40">{saving ? 'Saving…' : 'Save Series'}</button>
+            </div>
+          </div>
+        ) : <div className="flex items-center justify-center border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-400 p-10">Select a series or create the next annual festival.</div>}
+      </div>
+    </details>
+  );
+};
+
 // ── EventsTab (list + editor layout) ────────────────────────────────────────
-export const EventsTab = ({ events, onRefresh }: { events: EventData[]; onRefresh: () => void }) => {
+export const EventsTab = ({ events, series, onRefresh }: { events: EventData[]; series: EventSeries[]; onRefresh: () => void }) => {
   const [selectedId, setSelectedId] = useState<string | null>(events[0] ? String(events[0].id) : null);
-  const [reordering, setReordering] = useState(false);
+
+  useEffect(() => {
+    if (events.length > 0 && (!selectedId || !events.some(e => String(e.id) === selectedId))) {
+      setSelectedId(String(events[0].id));
+    }
+  }, [events, selectedId]);
 
   const selected = events.find(e => String(e.id) === selectedId) ?? null;
+  const now = mountainNowKey();
+  const lifecycleRank = (event: EventData) => {
+    if ((event.publicationStatus || 'published') === 'draft') return 0;
+    if (event.publicationStatus === 'archived' || event.publicationStatus === 'cancelled') return 4;
+    if (!eventEndKey(event)) return 1;
+    if (eventEndKey(event)! >= now) return 2;
+    return 3;
+  };
+  const orderedEvents = [...events].sort((a, b) => {
+    const rank = lifecycleRank(a) - lifecycleRank(b);
+    if (rank !== 0) return rank;
+    return lifecycleRank(a) === 3
+      ? eventChronologyKey(b).localeCompare(eventChronologyKey(a))
+      : eventChronologyKey(a).localeCompare(eventChronologyKey(b));
+  });
 
   const createEvent = async () => {
-    const ev = await api.post('/api/events', { title: 'New Event', status: 'TBD', iconKey: 'Heart', color: '#E91E63' });
+    const ev = await api.post('/api/events', { title: 'New Event', status: 'TBD', publicationStatus: 'draft', timezone: 'America/Denver', iconKey: 'Heart', color: '#E91E63' });
     await onRefresh();
     setSelectedId(String(ev.id));
   };
@@ -1536,58 +1722,34 @@ export const EventsTab = ({ events, onRefresh }: { events: EventData[]; onRefres
     onRefresh();
   };
 
-  // Persists a full reordering — used by both the up/down nudge buttons and
-  // "Sort by Date". The server just assigns sort_order = array index for
-  // each id, so both actions share the one bulk endpoint.
-  const persistOrder = async (ordered: EventData[]) => {
-    setReordering(true);
-    try {
-      await api.post('/api/events/reorder', { ids: ordered.map(e => e.id) });
-      await onRefresh();
-    } finally {
-      setReordering(false);
-    }
-  };
-
-  const move = (index: number, dir: -1 | 1) => {
-    const target = index + dir;
-    if (target < 0 || target >= events.length || reordering) return;
-    const next = [...events];
-    [next[index], next[target]] = [next[target], next[index]];
-    persistOrder(next);
-  };
-
-  // Events without a sort date sort last (in whatever order they were
-  // already in relative to each other), so setting a date is what "claims"
-  // an event's place in the chronological order — nothing jumps around
-  // unexpectedly for events still marked TBD.
-  const sortByDate = () => {
-    const next = [...events].sort((a, b) => {
-      if (!a.eventDateSort && !b.eventDateSort) return 0;
-      if (!a.eventDateSort) return 1;
-      if (!b.eventDateSort) return -1;
-      return a.eventDateSort.localeCompare(b.eventDateSort);
+  const duplicateEvent = async () => {
+    if (!selected) return;
+    const copy = await api.post('/api/events', {
+      ...selected,
+      id: undefined,
+      title: `${selected.title} — copy`,
+      publicationStatus: 'draft',
+      featured: false,
     });
-    persistOrder(next);
+    await onRefresh();
+    setSelectedId(String(copy.id));
   };
 
   return (
-    <div className="flex gap-6 min-h-[600px]">
+    <div>
+      <EventSeriesManager series={series} onRefresh={onRefresh} />
+      <div className="flex flex-col lg:flex-row gap-6 min-h-[600px]">
       {/* Left: event list */}
-      <div className="w-64 shrink-0 space-y-2">
+      <div className="w-full lg:w-72 shrink-0 space-y-2">
         <button onClick={createEvent}
           className="w-full py-2.5 bg-pink-500 text-white rounded-xl text-xs font-bold hover:bg-pink-600 transition-colors">
           + New Event
         </button>
-        <button onClick={sortByDate} disabled={reordering || events.length < 2}
-          title="Reorder all events chronologically by their sort date"
-          className="w-full py-2 bg-white border-2 border-gray-200 text-gray-600 rounded-xl text-[11px] font-bold hover:border-gray-300 hover:text-gray-900 transition-colors mb-2 flex items-center justify-center gap-1.5 disabled:opacity-40">
-          <ArrowDownWideNarrow size={13} /> Sort by Date
-        </button>
-        {events.map((ev, i) => (
-          <div key={ev.id} className="flex items-stretch gap-1">
+        <p className="px-2 py-1 text-[10px] text-gray-400 leading-relaxed">Drafts first, then upcoming events, then past events newest-first.</p>
+        {orderedEvents.map(ev => (
+          <div key={ev.id}>
             <button onClick={() => setSelectedId(String(ev.id))}
-              className={`flex-1 min-w-0 text-left p-3 rounded-xl border-2 flex items-center gap-3 transition-all ${
+              className={`w-full min-w-0 text-left p-3 rounded-xl border-2 flex items-center gap-3 transition-all ${
                 String(ev.id) === selectedId
                   ? 'border-gray-900 bg-gray-900 text-white'
                   : 'border-gray-200 bg-white text-gray-900 hover:border-gray-300'
@@ -1595,21 +1757,10 @@ export const EventsTab = ({ events, onRefresh }: { events: EventData[]; onRefres
               <div className="w-3 h-3 rounded-full shrink-0 border border-white/30" style={{ backgroundColor: ev.color }} />
               <div className="min-w-0 flex-1">
                 <p className="font-bold text-xs truncate">{ev.title}</p>
-                <p className={`text-[9px] uppercase font-black tracking-widest mt-0.5 ${String(ev.id) === selectedId ? 'text-gray-300' : 'text-gray-400'}`}>{ev.status}</p>
+                <p className={`text-[9px] uppercase font-black tracking-widest mt-0.5 ${String(ev.id) === selectedId ? 'text-gray-300' : 'text-gray-400'}`}>{ev.publicationStatus || 'published'}{ev.seriesTitle ? ` · ${ev.seriesTitle}` : ''}</p>
+                <p className="text-[10px] mt-1 text-gray-400">{eventDateLabel(ev)}</p>
               </div>
             </button>
-            <div className="flex flex-col shrink-0">
-              <button onClick={() => move(i, -1)} disabled={i === 0 || reordering}
-                title="Move up" aria-label="Move event up"
-                className="flex-1 w-6 flex items-center justify-center rounded-t-lg border-2 border-b-0 border-gray-200 text-gray-400 hover:text-gray-900 hover:border-gray-300 disabled:opacity-30 disabled:hover:text-gray-400 transition-colors">
-                <ChevronUp size={13} />
-              </button>
-              <button onClick={() => move(i, 1)} disabled={i === events.length - 1 || reordering}
-                title="Move down" aria-label="Move event down"
-                className="flex-1 w-6 flex items-center justify-center rounded-b-lg border-2 border-gray-200 text-gray-400 hover:text-gray-900 hover:border-gray-300 disabled:opacity-30 disabled:hover:text-gray-400 transition-colors">
-                <ChevronDown size={13} />
-              </button>
-            </div>
           </div>
         ))}
         {events.length === 0 && <p className="text-xs text-gray-400 italic">No events yet.</p>}
@@ -1617,12 +1768,13 @@ export const EventsTab = ({ events, onRefresh }: { events: EventData[]; onRefres
 
       {/* Right: editor */}
       {selected ? (
-        <EventEditor key={selected.id} event={selected} onSave={onRefresh} onDelete={deleteEvent} />
+        <EventEditor key={selected.id} event={selected} series={series} onSave={onRefresh} onDelete={deleteEvent} onDuplicate={duplicateEvent} />
       ) : (
         <div className="flex-1 flex items-center justify-center border-2 border-dashed border-gray-300 text-gray-400 text-sm italic">
           Select an event to edit
         </div>
       )}
+      </div>
     </div>
   );
 };
@@ -2231,16 +2383,17 @@ const EventDetailModal = ({ event, onClose }: { event: EventData; onClose: () =>
         {/* Content */}
         <div className="p-8 overflow-y-auto flex-1">
           <h2 className="text-3xl font-black text-gray-900 tracking-tight mb-2">{event.title}</h2>
+          {event.seriesTitle && <p className="text-xs font-black uppercase tracking-widest text-purple-500 mb-4">{event.seriesTitle}</p>}
 
           <div className="flex flex-wrap gap-4 mb-6 text-sm">
             <div className="flex items-center gap-2 text-gray-600">
               <Calendar size={15} className="text-pink-500" />
-              {event.date || event.eventDate || 'Date TBD'}
+              {eventDateLabel(event)}
             </div>
-            {(event.time || event.eventTime) && (
+            {(event.time || event.eventTime || event.startAt) && (
               <div className="flex items-center gap-2 text-gray-600">
                 <Clock size={15} className="text-pink-500" />
-                {event.time || event.eventTime}
+                {eventTimeLabel(event)}
               </div>
             )}
             {event.location && (
@@ -2480,7 +2633,7 @@ const SuggestionBoxForm = () => {
   );
 };
 
-const Navbar = ({ phase }: { phase: SitePhase }) => {
+const Navbar = ({ showMeetings }: { showMeetings: boolean }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -2492,7 +2645,7 @@ const Navbar = ({ phase }: { phase: SitePhase }) => {
 
   const navLinks = [
     { name: 'Events', href: '#events' },
-    { name: 'Meetings', href: '#meetings', hiddenPhases: ['LIVE_EVENT'] as SitePhase[] },
+    { name: 'Meetings', href: '#meetings', hidden: !showMeetings },
     { name: 'Volunteer', href: '#volunteer' },
     { name: 'Photos', href: '/gallery' },
     { name: 'Sponsors', href: '#sponsors' },
@@ -2510,7 +2663,7 @@ const Navbar = ({ phase }: { phase: SitePhase }) => {
 
         {/* Desktop Nav */}
         <div className="hidden md:flex items-center gap-8">
-          {navLinks.filter(l => !l.hiddenPhases?.includes(phase)).map((link) => (
+          {navLinks.filter(l => !l.hidden).map((link) => (
             <a 
               key={link.name} 
               href={link.href} 
@@ -2542,7 +2695,7 @@ const Navbar = ({ phase }: { phase: SitePhase }) => {
             exit={{ opacity: 0, y: -20 }}
             className="absolute top-full left-0 w-full bg-white shadow-xl py-8 flex flex-col items-center gap-6 md:hidden"
           >
-            {navLinks.filter(l => !l.hiddenPhases?.includes(phase)).map((link) => (
+            {navLinks.filter(l => !l.hidden).map((link) => (
               <a
                 key={link.name}
                 href={link.href}
@@ -2596,7 +2749,7 @@ const SectionHeading = ({ children, subtitle, light = false }: { children: React
   </div>
 );
 
-const EventCard = ({ event, phase, onOpen }: { event: EventData; phase: SitePhase; onOpen: (e: EventData) => void }) => (
+const EventCard = ({ event, onOpen }: { event: EventData; onOpen: (e: EventData) => void }) => (
   <motion.div
     whileHover={{ y: -10 }}
     onClick={() => onOpen(event)}
@@ -2627,10 +2780,13 @@ const EventCard = ({ event, phase, onOpen }: { event: EventData; phase: SitePhas
     </div>
 
     <div className="p-8 flex-grow flex flex-col">
+      {event.seriesTitle && (
+        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-purple-500 mb-3">{event.seriesTitle}</p>
+      )}
       {event.status === 'CONFIRMED' ? (
         <div className="flex items-center gap-3 mb-4 text-pink-500 font-bold uppercase text-sm tracking-widest">
           <Calendar size={16} />
-          {event.date || event.eventDate}
+          {eventDateLabel(event)}
         </div>
       ) : (
         <div className="flex items-center gap-3 mb-4 text-gray-400 font-bold uppercase text-sm tracking-widest italic">
@@ -2658,7 +2814,7 @@ const EventCard = ({ event, phase, onOpen }: { event: EventData; phase: SitePhas
       <div className="space-y-3 pt-6 border-t border-gray-50">
         <div className="flex items-center gap-3 text-gray-600 text-sm">
           <Clock size={16} className={event.status === 'CONFIRMED' ? 'text-pink-500' : 'text-gray-300'} />
-          {event.time || event.eventTime || 'TBD'}
+          {eventTimeLabel(event)}
         </div>
         <div className="flex items-start gap-3 text-gray-800 text-sm font-medium">
           <MapPin size={16} className={event.status === 'CONFIRMED' ? 'text-pink-500 shrink-0 mt-0.5' : 'text-gray-300 shrink-0 mt-0.5'} />
@@ -2681,8 +2837,9 @@ const PastEventsSection = ({ events, onOpen }: { events: EventData[]; onOpen: (e
 
   const byYear = new Map<number, EventData[]>();
   for (const ev of events) {
-    if (!ev.eventDateSort) continue;
-    const year = new Date(ev.eventDateSort + 'T00:00:00').getFullYear();
+    const dateKey = ev.startAt?.slice(0, 10) || ev.eventDateSort;
+    if (!dateKey) continue;
+    const year = Number(dateKey.slice(0, 4));
     if (!byYear.has(year)) byYear.set(year, []);
     byYear.get(year)!.push(ev);
   }
@@ -2726,7 +2883,7 @@ const PastEventsSection = ({ events, onOpen }: { events: EventData[]; onOpen: (e
                   <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: ev.color }} />
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-gray-900 text-sm truncate">{ev.title}</p>
-                    <p className="text-xs text-gray-400">{ev.date || ev.eventDate}</p>
+                    <p className="text-xs text-gray-400">{eventDateLabel(ev)}{ev.seriesTitle ? ` · ${ev.seriesTitle}` : ''}</p>
                   </div>
                   <ChevronRight size={14} className="text-gray-300 shrink-0" />
                 </button>
@@ -4769,6 +4926,7 @@ export default function App() {
 
   // Dynamic Data States
   const [events, setEvents] = useState<EventData[]>([]);
+  const [eventSeries, setEventSeries] = useState<EventSeries[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [sponsors, setSponsors] = useState<Sponsor[]>([]);
   const [albums, setAlbums] = useState<PhotoAlbum[]>([]);
@@ -4792,19 +4950,18 @@ export default function App() {
 
   const fetchData = async () => {
     try {
-      const [dataE, dataM, dataS, dataP, settings] = await Promise.all([
-        api.get('/api/events'),
+      const adminQuery = isManageMode && isAuthed ? '?admin=1' : '';
+      const [dataE, dataSeries, dataM, dataS, dataP, settings] = await Promise.all([
+        api.get(`/api/events${adminQuery}`),
+        api.get(`/api/event-series${adminQuery}`),
         api.get('/api/meetings'),
         api.get('/api/sponsors'),
         api.get('/api/photos'),
         api.get('/api/settings'),
       ]);
 
-      setEvents(dataE.length ? dataE : [
-        { id: '1', title: 'Film Fest', status: 'TBD', iconKey: 'Camera', color: '#9C27B0' },
-        { id: '2', title: 'Plaza Pride', status: 'TBD', iconKey: 'Globe', color: '#E91E63' },
-        { id: '3', title: 'Drag Show', status: 'TBD', iconKey: 'Music', color: '#FF5722' }
-      ]);
+      setEvents(dataE || []);
+      setEventSeries(dataSeries || []);
       setMeetings(dataM.length ? dataM : [
         { id: 'm1', date: 'Date TBD', time: '6:30 PM', location: 'Meeting Room', whoIsInvited: 'Everyone' }
       ]);
@@ -4857,6 +5014,10 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (isManageMode && isAuthed) fetchData();
+  }, [isManageMode, isAuthed]);
+
   const handleAdminAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -4874,20 +5035,20 @@ export default function App() {
 
   const visibleParticipationKeys = PARTICIPATION_KEYS.filter(k => participationConfigs[k].visible);
 
-  // Events without a sort date are always "upcoming" (nothing to judge them
-  // against — they're TBD, not expired). String comparison works fine since
-  // eventDateSort is always an ISO YYYY-MM-DD, which sorts lexicographically
-  // the same as chronologically.
-  //
-  // Deliberately NOT `new Date().toISOString()` — that's UTC, and Taos is
-  // UTC-6/-7. From roughly mid-afternoon Mountain Time onward, the UTC
-  // calendar date has already rolled to tomorrow, which would flip today's
-  // events into "past" while they're still hours from happening. Use the
-  // visitor's local date components instead.
-  const now = new Date();
-  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const upcomingEvents = events.filter(e => !e.eventDateSort || e.eventDateSort >= todayIso);
-  const pastEvents     = events.filter(e => e.eventDateSort && e.eventDateSort < todayIso);
+  const nowKey = mountainNowKey();
+  const upcomingEvents = events
+    .filter(e => !eventEndKey(e) || eventEndKey(e)! >= nowKey)
+    .sort((a, b) => eventChronologyKey(a).localeCompare(eventChronologyKey(b)) || Number(b.featured) - Number(a.featured));
+  const pastEvents = events
+    .filter(e => !!eventEndKey(e) && eventEndKey(e)! < nowKey)
+    .sort((a, b) => eventChronologyKey(b).localeCompare(eventChronologyKey(a)));
+  const featuredSeries = eventSeries.find(s => s.featured && s.publicationStatus === 'published');
+  const featuredSeriesEvents = featuredSeries
+    ? upcomingEvents.filter(e => String(e.seriesId ?? '') === String(featuredSeries.id))
+    : [];
+  const otherUpcomingEvents = featuredSeries
+    ? upcomingEvents.filter(e => String(e.seriesId ?? '') !== String(featuredSeries.id))
+    : upcomingEvents;
 
   const [activeFormType, setActiveFormType] = useState<string | null>(null);
   const [activeMeetingAgenda, setActiveMeetingAgenda] = useState<Meeting | null>(null);
@@ -4973,7 +5134,7 @@ export default function App() {
           )}
 
           {adminTab === 'events' && (
-            <EventsTab events={events} onRefresh={fetchData} />
+            <EventsTab events={events} series={eventSeries} onRefresh={fetchData} />
           )}
 
           {adminTab === 'meetings' && (
@@ -5011,7 +5172,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFCF8] text-gray-900 font-sans selection:bg-pink-200 selection:text-pink-900 pb-20">
-      <Navbar phase={phase} />
+      <Navbar showMeetings={showMeetings} />
       
       {activeFormType && (
         <ParticipationForm
@@ -5131,31 +5292,49 @@ export default function App() {
         </section>
       )}
 
-      {/* Events Section — now a real 3-way split matching the phase's own
-          definition (was previously LIVE_EVENT vs. everything else, so
-          Planning and Active shared a heading). */}
+      {/* Event lifecycle is independent of the promotional hero phase. */}
       <section id="events" className="py-32 px-6 max-w-7xl mx-auto">
-        <SectionHeading subtitle={
-          phase === 'LIVE_EVENT'      ? "Celebrating our community through art, performance, and joy." :
-          phase === 'ACTIVE_PLANNING' ? "Here's a first look at what we're planning — details are still coming together." :
-          "The early stages of our vision. Everything starts here."
-        }>
-          {phase === 'LIVE_EVENT' ? 'Main Events' : phase === 'ACTIVE_PLANNING' ? 'Event Teasers' : 'Save the Date'}
+        <SectionHeading subtitle="Celebrations, gatherings, fundraisers, and community events throughout the year.">
+          Upcoming Events
         </SectionHeading>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {upcomingEvents.map((event, idx) => (
-            <motion.div
-              key={event.id}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: idx * 0.1 }}
-            >
-              <EventCard event={event} phase={phase} onOpen={setActiveDetailEvent} />
-            </motion.div>
-          ))}
-        </div>
+        {featuredSeries && featuredSeriesEvents.length > 0 && (
+          <div className="mb-16">
+            <div className="mb-7">
+              <p className="text-xs font-black uppercase tracking-[0.25em] text-pink-500 mb-2">Featured Festival</p>
+              <h3 className="text-3xl font-black text-gray-900">{featuredSeries.title}</h3>
+              {featuredSeries.description && <p className="text-gray-500 mt-2 max-w-3xl">{featuredSeries.description}</p>}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              {featuredSeriesEvents.map((event, idx) => (
+                <motion.div key={event.id} initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: idx * 0.1 }}>
+                  <EventCard event={event} onOpen={setActiveDetailEvent} />
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {otherUpcomingEvents.length > 0 && (
+          <div>
+            {featuredSeriesEvents.length > 0 && <h3 className="text-xl font-black text-gray-900 mb-6">More community events</h3>}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              {otherUpcomingEvents.map((event, idx) => (
+                <motion.div key={event.id} initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: idx * 0.1 }}>
+                  <EventCard event={event} onOpen={setActiveDetailEvent} />
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {upcomingEvents.length === 0 && (
+          <div className="max-w-2xl mx-auto text-center border-2 border-dashed border-gray-200 rounded-3xl px-8 py-12 bg-white">
+            <Calendar size={32} className="mx-auto text-pink-400 mb-4" />
+            <h3 className="text-xl font-black text-gray-900 mb-2">New events are coming</h3>
+            <p className="text-gray-500">There is nothing on the public calendar right now. Check back soon for the next Taos Pride gathering.</p>
+          </div>
+        )}
 
         <PastEventsSection events={pastEvents} onOpen={setActiveDetailEvent} />
       </section>

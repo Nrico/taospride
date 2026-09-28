@@ -50,6 +50,7 @@ jobs:
           path: |
             release/taospride-cpanel.zip
             release/UPLOAD-INSTRUCTIONS.txt
+            release/RUN-IN-PHPMYADMIN.sql
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

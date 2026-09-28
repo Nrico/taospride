@@ -22,11 +22,36 @@ INSERT INTO site_settings (setting_key, setting_value) VALUES
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
 -- ============================================================
+-- EVENT SERIES / FESTIVALS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS event_series (
+  id                  INT AUTO_INCREMENT PRIMARY KEY,
+  title               VARCHAR(200) NOT NULL,
+  slug                VARCHAR(200) NOT NULL UNIQUE,
+  series_type         ENUM('festival','community','other') DEFAULT 'festival',
+  start_at            DATETIME NULL,
+  end_at              DATETIME NULL,
+  timezone            VARCHAR(64) NOT NULL DEFAULT 'America/Denver',
+  description         TEXT,
+  publication_status  ENUM('draft','published','archived') NOT NULL DEFAULT 'draft',
+  featured            TINYINT(1) NOT NULL DEFAULT 0,
+  created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- ============================================================
 -- EVENTS
 -- ============================================================
 CREATE TABLE IF NOT EXISTS events (
   id                   INT AUTO_INCREMENT PRIMARY KEY,
+  series_id            INT NULL,
   title                VARCHAR(200) NOT NULL,
+  event_type           VARCHAR(80),
+  start_at             DATETIME NULL,
+  end_at               DATETIME NULL,
+  timezone             VARCHAR(64) NOT NULL DEFAULT 'America/Denver',
+  publication_status   ENUM('draft','published','cancelled','archived') NOT NULL DEFAULT 'draft',
+  featured             TINYINT(1) NOT NULL DEFAULT 0,
   status               ENUM('TBD','TEASER','CONFIRMED') DEFAULT 'TBD',
   icon_key             VARCHAR(50)  DEFAULT 'Heart',
   color                VARCHAR(20)  DEFAULT '#E91E63',
@@ -61,7 +86,10 @@ CREATE TABLE IF NOT EXISTS events (
   -- Sort order in public display
   sort_order           INT          DEFAULT 0,
   created_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
-  updated_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  updated_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_events_publication_start (publication_status, start_at),
+  INDEX idx_events_series (series_id),
+  FOREIGN KEY (series_id) REFERENCES event_series(id) ON DELETE SET NULL
 );
 
 -- ============================================================

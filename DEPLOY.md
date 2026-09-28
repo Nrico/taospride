@@ -45,18 +45,32 @@ You'll see a string of green success messages. Any red errors mean you either di
 
 ---
 
-## Step 3 — Set the password
+## Step 3 — Set the password securely
 
-Still in phpMyAdmin, click the **SQL** tab and run this block (edit the password first):
+Generate a password hash locally. The helper prompts without echoing the password
+and never writes the password to disk or shell history:
+
+```bash
+php tools/hash_admin_password.php
+```
+
+Copy the resulting `$2y$...` hash. Then, in phpMyAdmin, click the **SQL** tab and
+run this block after replacing `PASTE-PASSWORD-HASH-HERE`:
 
 ```sql
 -- Single unified admin password — this one login covers the main site
--- admin, the board portal, and gallery admin. There is no separate board password
--- anymore — board_password_plain/_hash are dead columns, safe to ignore
--- or delete.
+-- admin, the board portal, and gallery admin.
 INSERT INTO site_settings (setting_key, setting_value)
-VALUES ('admin_password_plain', 'YOUR-ADMIN-PASSWORD')
-ON DUPLICATE KEY UPDATE setting_value = 'YOUR-ADMIN-PASSWORD';
+VALUES ('admin_password_hash', 'PASTE-PASSWORD-HASH-HERE')
+ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
+
+-- Plaintext and retired board credentials must not remain in site_settings.
+DELETE FROM site_settings
+WHERE setting_key IN (
+  'admin_password_plain',
+  'board_password_plain',
+  'board_password_hash'
+);
 
 -- Vault PIN (4-digit number, default is 1969 — change if you want). This is
 -- a SECOND gate on top of the admin login above, specifically for the
@@ -67,12 +81,11 @@ VALUES ('vault_pin', '1969')
 ON DUPLICATE KEY UPDATE setting_value = '1969';
 ```
 
-Replace `YOUR-ADMIN-PASSWORD` with whatever you choose — make it a real, strong password.
-It's worth more care than before: this one credential now unlocks site content, the board
-roster/documents and gallery management, not just event editing.
+Use a unique password of at least 16 characters. This one credential unlocks site
+content, the board roster/documents, and gallery management—not just event editing.
 The vault PIN can stay as `1969` or you can change it here.
 
-Click **Go**. You should see two green rows affected.
+Click **Go** and confirm the statements complete without an error.
 
 ---
 
@@ -238,10 +251,15 @@ public_html/
 
 Run these in phpMyAdmin → SQL tab:
 
-**Change the admin password** (this is now the *only* password — it covers Site, Board, and Gallery):
+**Change the admin password** (this is the only password for Site, Board, and Gallery):
+
+First generate a new hash with `php tools/hash_admin_password.php`, then run:
+
 ```sql
-UPDATE site_settings SET setting_value = 'new-password'
-WHERE setting_key = 'admin_password_plain';
+UPDATE site_settings SET setting_value = 'PASTE-NEW-PASSWORD-HASH-HERE'
+WHERE setting_key = 'admin_password_hash';
+
+DELETE FROM site_settings WHERE setting_key = 'admin_password_plain';
 ```
 
 **Change the vault PIN** (separate, extra gate just for Board → Secure Vault):
@@ -250,8 +268,7 @@ UPDATE site_settings SET setting_value = '5678'
 WHERE setting_key = 'vault_pin';
 ```
 
-There is no board password to change anymore — `board_password_plain`/`board_password_hash` are
-unused leftover rows, safe to delete:
+There is no board password to change anymore. Remove any legacy board rows:
 ```sql
 DELETE FROM site_settings WHERE setting_key IN ('board_password_plain', 'board_password_hash');
 ```
@@ -287,6 +304,18 @@ admin password:
 ```sql
 DELETE FROM site_settings WHERE setting_key IN ('board_password_plain', 'board_password_hash');
 ```
+
+**Security migration for installations that ever stored a plaintext admin password:**
+
+1. Generate a new hash with `php tools/hash_admin_password.php`.
+2. Write the new `admin_password_hash` in phpMyAdmin.
+3. Delete `admin_password_plain`, `board_password_plain`, and `board_password_hash`.
+4. Upload the updated `api/index.php` and `api/board.php`.
+5. Verify `/api/settings` contains no key with `password`, `secret`, `token`, or `pin`
+   in its name, then verify `/admin` login in a private browser window.
+
+Set the hash before uploading the hash-only PHP files so the deployment does not lock
+out the administrators between steps.
 
 **If you're updating an already-live site to get login rate limiting**, run this once (new
 installs get it automatically via `schema.sql`):
@@ -337,7 +366,7 @@ but doesn't save anything) and a per-IP limit of 5 submissions per hour.
 | White screen or 404 on page refresh | `.htaccess` missing or mod_rewrite off | Re-upload `public_html/.htaccess`; GoDaddy has mod_rewrite on by default |
 | `/api/health` returns 404 | `api/.htaccess` not uploaded | Re-upload the full `api/` folder |
 | `/api/health` returns 500 | Wrong DB credentials in `config.php` | Fix the three DB lines; check PHP error log in cPanel → Logs |
-| Admin login says invalid password (any of `/admin`, `/#manage`, `/board/`) | Password not set in DB | Re-run the SQL from Step 3 — all three now check the same `admin_password_plain`/`_hash` |
+| Admin login says invalid password (any of `/admin`, `/#manage`, `/board/`) | Password hash not set in DB | Generate a hash and re-run the `admin_password_hash` SQL from Step 3 |
 | Login says "Too many failed attempts" (`429`) | Rate limiting tripped — 8 failed attempts from the same IP within 15 minutes | Working as intended; wait 15 minutes, or clear it early with `DELETE FROM login_attempts WHERE ip_address = 'THE_IP';` (or `vault_access_log` for a locked-out Vault PIN) |
 | Board portal — `/board/` loads main site instead | `board/.htaccess` not uploaded | Upload `dist/board/.htaccess` → `public_html/board/.htaccess`; enable hidden files in FileZilla first |
 | File upload fails in Documents or Vault | `board_uploads/` or `vault_uploads/` not writable | Create the folders manually in FileZilla if PHP didn't auto-create them |
@@ -345,5 +374,5 @@ but doesn't save anything) and a per-IP limit of 5 submissions per hour.
 | `/admin/gallery` shows errors but Site and Board tabs work fine | Gallery tables are missing from the main database | Import the gallery section of `database/schema.sql`, then retry |
 | `/admin/gallery` photo upload fails specifically (years/events work) | Upload exceeds a PHP size limit or `gallery-photos/` is not writable | Check `api/php.ini` and the permissions on `public_html/gallery-photos/` |
 | Logging out of `/admin` didn't also log out an open Board tab elsewhere | Old cached JS bundle | Hard-refresh the Board tab — this was a real bug in the pre-unification code, fixed as part of the single-session work, but a stale cached bundle can still show old behavior |
-| Logo missing | PNG not uploaded | Upload `dist/TaosPrideLogo.png` → `public_html/TaosPrideLogo.png` |
+| Logo missing or returns 403 | PNG missing or server permissions deny reads | Upload `dist/TaosPrideLogo.png` → `public_html/TaosPrideLogo.png`, set the file to `0644` and `public_html` to `0755`, then verify `https://taospride.org/TaosPrideLogo.png` directly |
 | Old JS/CSS after an update | Browser cache | Hard-refresh: Cmd+Shift+R (Mac) or Ctrl+Shift+R (Windows) |

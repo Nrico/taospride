@@ -18,8 +18,7 @@ INSERT INTO site_settings (setting_key, setting_value) VALUES
   ('event_year',   '2026'),
   ('festival_start', ''),
   ('festival_end',   ''),
-  ('tagline',      'Love Is Resistant'),
-  ('admin_password_hash', '$2y$12$PLACEHOLDER_CHANGE_ON_INSTALL')
+  ('tagline',      'Love Is Resistant')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
 -- ============================================================

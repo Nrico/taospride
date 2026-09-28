@@ -152,12 +152,12 @@ function handle_auth(string $method, string $action): void {
         require_not_rate_limited('admin');
         $body = body();
         $hash = setting('admin_password_hash');
-        // A plain-text value is supported for existing installs, but there is
-        // deliberately no built-in password when configuration is missing.
-        $plain = setting('admin_password_plain');
         $pw = $body['password'] ?? '';
-        $ok = ($hash !== '' && password_verify($pw, $hash))
-           || ($plain !== '' && hash_equals($plain, $pw));
+        // Admin credentials must only be stored as password_hash() values.
+        // Never fall back to a plaintext site_settings row: settings are
+        // primarily public content, and a legacy plaintext row is unsafe even
+        // if a future response-filtering regression occurs.
+        $ok = ($hash !== '' && password_verify($pw, $hash));
         record_login_attempt($ok);
         if ($ok) {
             $_SESSION[SESSION_KEY] = true;
@@ -185,12 +185,39 @@ function handle_auth(string $method, string $action): void {
 // ============================================================
 // SETTINGS
 // ============================================================
+function is_public_setting_key(string $key): bool {
+    static $exact = [
+        'phase',
+        'event_year',
+        'festival_start',
+        'festival_end',
+        'tagline',
+        'show_meetings_section',
+        'sponsorship_open',
+    ];
+
+    if (in_array($key, $exact, true)) return true;
+
+    return (bool) preg_match(
+        '/^hero_(planning|active|live)_(image|line1|line2|sub|ctaLabel|ctaHref)$/',
+        $key
+    ) || (bool) preg_match(
+        '/^participate_(volunteer|vendor|performer|parade)$/',
+        $key
+    );
+}
+
 function handle_settings(string $method): void {
     if ($method === 'GET') {
+        // site_settings also contains server-only authentication values. Keep
+        // this endpoint fail-closed: only explicitly public presentation keys
+        // may ever leave the server.
         $rows = db()->query('SELECT setting_key, setting_value FROM site_settings')->fetchAll();
         $out = [];
         foreach ($rows as $r) {
-            $out[$r['setting_key']] = $r['setting_value'];
+            if (is_public_setting_key($r['setting_key'])) {
+                $out[$r['setting_key']] = $r['setting_value'];
+            }
         }
         json_response($out);
     }
@@ -199,7 +226,10 @@ function handle_settings(string $method): void {
         $body = body();
         $st   = db()->prepare('INSERT INTO site_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?');
         foreach ($body as $k => $v) {
-            if ($k === 'admin_password_hash') continue; // protect
+            // This route edits public site presentation only. Credentials,
+            // vault configuration, tokens, and future private settings must
+            // use dedicated protected workflows.
+            if (!is_public_setting_key((string) $k)) continue;
             $st->execute([$k, $v, $v]);
         }
         json_response(['success' => true]);

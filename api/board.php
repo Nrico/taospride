@@ -94,10 +94,8 @@ function handle_board_auth(string $method, string $action): void {
         require_not_rate_limited('admin');
         $body  = body();
         $hash  = setting('admin_password_hash');
-        $plain = setting('admin_password_plain');
         $pw    = $body['password'] ?? '';
-        $ok    = ($hash !== '' && password_verify($pw, $hash))
-              || ($plain !== '' && hash_equals($plain, $pw));
+        $ok    = ($hash !== '' && password_verify($pw, $hash));
         record_login_attempt($ok);
         if ($ok) {
             $_SESSION[SESSION_KEY] = true;

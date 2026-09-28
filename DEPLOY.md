@@ -2,6 +2,11 @@
 
 This covers a first-time deployment. For updates after the site is live, jump to **Updating the site** at the bottom.
 
+> **Easiest update path:** run `npm run release`, then upload and extract the
+> generated `release/taospride-cpanel.zip` inside GoDaddy's existing
+> `public_html` directory. See `PUBLISH.md` for the short checklist. The detailed
+> steps below remain useful for first-time setup and troubleshooting.
+
 ---
 
 ## Before you start — one-time local step

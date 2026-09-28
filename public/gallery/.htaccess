@@ -1,0 +1,12 @@
+# Photo Gallery — SPA routing
+Options -MultiViews
+RewriteEngine On
+RewriteBase /gallery/
+
+# Static assets pass through
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Everything else → gallery SPA
+RewriteRule ^ /gallery/index.html [L]

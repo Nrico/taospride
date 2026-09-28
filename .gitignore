@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Production credentials and generated deployment bundles
+api/config.php
+api.zip
+
+# Local development state and content snapshots. Production content lives in
+# MySQL; these files may contain submissions, donor details, or embedded images.
+data/*
+!data/.gitkeep

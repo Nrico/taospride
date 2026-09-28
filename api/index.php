@@ -251,6 +251,7 @@ function is_public_setting_key(string $key): bool {
         'show_meetings_section',
         'sponsorship_open',
         'sponsorship_state',
+        'contribution_settings',
     ];
 
     if (in_array($key, $exact, true)) return true;
@@ -532,7 +533,11 @@ function handle_events_reorder(string $method): void {
 function handle_performers(string $method, ?int $eventId, ?int $perfId): void {
     $db = db();
     if ($method === 'GET') {
-        $st = $db->prepare('SELECT * FROM event_performers WHERE event_id = ? ORDER BY sort_order, id');
+        $admin = ($_GET['admin'] ?? '') === '1';
+        if ($admin) require_auth();
+        $st = $db->prepare($admin
+            ? 'SELECT * FROM event_performers WHERE event_id = ? ORDER BY sort_order, id'
+            : 'SELECT id,event_id,name,type,bio,confirmed,performance_time,sort_order FROM event_performers WHERE event_id = ? AND confirmed = 1 ORDER BY sort_order, id');
         $st->execute([$eventId]);
         $rows = $st->fetchAll();
         json_response(array_map(fn($r) => cast_bools(camel($r), ['confirmed']), $rows));
@@ -1048,15 +1053,26 @@ function handle_suggestion_promote(string $method, ?int $id): void {
 function handle_contribute(string $method): void {
     if ($method !== 'POST') { error_response('Method not allowed', 405); }
     $b = body();
-    if (empty($b['email'])) { error_response('Email required', 400); }
+    if (trim($b['website'] ?? '') !== '') { json_response(['success' => true]); return; }
+    $email = trim($b['email'] ?? '');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) { error_response('A valid email is required', 400); }
+    $allowedMethods = ['paypal', 'venmo', 'square', 'stripe', 'check'];
+    $paymentMethod = strtolower(trim($b['method'] ?? ''));
+    if ($paymentMethod !== '' && !in_array($paymentMethod, $allowedMethods, true)) {
+        error_response('Invalid contribution method', 400);
+    }
+    $amount = isset($b['amount']) && $b['amount'] !== '' ? (float)$b['amount'] : null;
+    if ($amount !== null && ($amount < 0 || $amount > 1000000)) { error_response('Invalid amount', 400); }
+    $name = mb_substr(trim($b['name'] ?? ''), 0, 190);
+    $message = mb_substr(trim($b['message'] ?? ''), 0, 4000);
     db()->prepare(
         'INSERT INTO contribution_notifications (name,email,amount,method,message) VALUES (?,?,?,?,?)'
     )->execute([
-        $b['name']    ?? null,
-        $b['email'],
-        isset($b['amount']) ? (float)$b['amount'] : null,
-        $b['method']  ?? null,
-        $b['message'] ?? null,
+        $name !== '' ? $name : null,
+        $email,
+        $amount,
+        $paymentMethod !== '' ? $paymentMethod : null,
+        $message !== '' ? $message : null,
     ]);
     json_response(['success' => true]);
 }

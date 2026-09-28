@@ -21,7 +21,8 @@ INSERT INTO site_settings (setting_key, setting_value) VALUES
   ('festival_end',   ''),
   ('tagline',      'Love Is Resistant'),
   ('show_meetings_section', '1'),
-  ('sponsorship_state', 'open')
+  ('sponsorship_state', 'open'),
+  ('contribution_settings', '{"state":"hidden","heading":"Support Taos Pride","description":"Choose any currently available way to support Taos Pride.","showAcknowledgmentForm":true,"methods":{"paypal":{"enabled":false,"label":"PayPal","url":"","instructions":""},"venmo":{"enabled":false,"label":"Venmo","url":"","instructions":""},"square":{"enabled":false,"label":"Square","url":"","instructions":""},"stripe":{"enabled":false,"label":"Stripe","url":"","instructions":""},"check":{"enabled":false,"label":"Check","url":"","instructions":""}}}')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
 -- A fresh schema already has the event lifecycle columns, so mark its backfill

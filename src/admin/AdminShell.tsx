@@ -5,7 +5,7 @@ import {
 import {
   LayoutDashboard, Calendar, CalendarDays, ClipboardList, Megaphone,
   Camera, Mail, Image as ImageIcon, Users, LogOut, Shield, Images,
-  Briefcase, GitBranch, CheckSquare, FolderOpen, Archive,
+  Briefcase, GitBranch, CheckSquare, FolderOpen, Archive, HandHeart,
 } from 'lucide-react';
 import { adminApi } from './adminApi';
 import AdminLogin from './AdminLogin';
@@ -18,7 +18,7 @@ import GallerySection from './gallery/GallerySection';
 // truth for both the legacy #manage path and this new /admin path.
 import {
   AdminDashboard, EventsTab, MeetingsTab, ApplicationsViewer, SponsorsAdmin,
-  PhotosAdmin, CommunicationsAdmin, HeroEditor, ParticipationAdmin,
+  PhotosAdmin, CommunicationsAdmin, ContributionsAdmin, HeroEditor, ParticipationAdmin,
   HERO_DEFAULTS, PARTICIPATION_DEFAULTS, PARTICIPATION_KEYS,
   HeroPresetSwitcher, meetingIsPast,
 } from '../App';
@@ -108,7 +108,8 @@ const SITE_TABS = [
   { to: 'applications',  label: 'Applications',   icon: <ClipboardList size={15} /> },
   { to: 'sponsors',      label: 'Sponsors',       icon: <Megaphone size={15} /> },
   { to: 'photo-albums',  label: 'Photo Albums',   icon: <Camera size={15} /> },
-  { to: 'comms',         label: 'Communications', icon: <Mail size={15} /> },
+  { to: 'contributions', label: 'Contributions',  icon: <HandHeart size={15} /> },
+  { to: 'comms',         label: 'Mailing List',   icon: <Mail size={15} /> },
   { to: 'hero',          label: 'Hero Banner',    icon: <ImageIcon size={15} /> },
   { to: 'participation', label: 'Get Involved',   icon: <Users size={15} /> },
 ];
@@ -196,11 +197,13 @@ function AdminAuthedShell({ onLogout }: { onLogout: () => void }) {
               <p className="text-xs text-gray-400">Site, board &amp; volunteers</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <HeroPresetSwitcher value={data.heroPreset} onChange={changeHeroPreset} />
+          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+            <div className="max-w-full overflow-x-auto">
+              <HeroPresetSwitcher value={data.heroPreset} onChange={changeHeroPreset} />
+            </div>
             <button
               onClick={onLogout}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-500 rounded-xl text-xs font-bold hover:bg-gray-100 transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-500 rounded-xl text-xs font-bold hover:bg-gray-100 transition-colors shadow-sm shrink-0"
             >
               <LogOut size={14} /> Sign Out
             </button>
@@ -217,6 +220,7 @@ function AdminAuthedShell({ onLogout }: { onLogout: () => void }) {
           <Route path="applications" element={<ApplicationsViewer />} />
           <Route path="sponsors" element={<SponsorsAdmin sponsors={data.sponsors} onRefresh={data.refresh} />} />
           <Route path="photo-albums" element={<PhotosAdmin albums={data.albums} events={data.events} onRefresh={data.refresh} />} />
+          <Route path="contributions" element={<ContributionsAdmin />} />
           <Route path="comms" element={<CommunicationsAdmin />} />
           <Route path="hero" element={<HeroEditor initial={data.heroSettings} onSaved={data.setHeroSettings} />} />
           <Route path="participation" element={<ParticipationAdmin initial={data.participationConfigs} onSaved={data.setParticipationConfigs} />} />

@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs/promises";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,11 +14,26 @@ let activeDevPassword = DEV_PASSWORD;
 let devPasswordMigrationRequired = process.env.DEV_FORCE_PASSWORD_MIGRATION === "1";
 const SESSION_FILE = path.join(process.cwd(), "data", ".session");
 
-const readSession = async (): Promise<boolean> => {
-  try { return (await fs.readFile(SESSION_FILE, "utf-8")).trim() === "1"; } catch { return false; }
+const readSession = async (req: express.Request): Promise<boolean> => {
+  const cookie = req.headers.cookie?.split(";")
+    .map(part => part.trim())
+    .find(part => part.startsWith("tp_dev_session="))
+    ?.slice("tp_dev_session=".length);
+  if (!cookie) return false;
+  try {
+    const saved = (await fs.readFile(SESSION_FILE, "utf-8")).trim();
+    return saved.length === cookie.length && crypto.timingSafeEqual(Buffer.from(saved), Buffer.from(cookie));
+  } catch { return false; }
 };
-const writeSession = async (v: boolean) => {
-  await fs.writeFile(SESSION_FILE, v ? "1" : "0");
+const writeSession = async (res: express.Response, authenticated: boolean) => {
+  if (!authenticated) {
+    await fs.writeFile(SESSION_FILE, "");
+    res.setHeader("Set-Cookie", "tp_dev_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    return;
+  }
+  const token = crypto.randomBytes(32).toString("hex");
+  await fs.writeFile(SESSION_FILE, token);
+  res.setHeader("Set-Cookie", `tp_dev_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800`);
 };
 
 async function startServer() {
@@ -25,6 +41,11 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json({ limit: '20mb' }));
+
+  const requireDevAuth: express.RequestHandler = async (req, res, next) => {
+    if (!(await readSession(req))) return res.status(401).json({ error: "Unauthorized" });
+    next();
+  };
 
   const DATA_DIR = path.join(process.cwd(), "data");
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -51,7 +72,7 @@ async function startServer() {
       });
     }
     if (req.body?.password === activeDevPassword) {
-      await writeSession(true);
+      await writeSession(res, true);
       res.json({ success: true });
     } else {
       res.status(401).json({ error: "Invalid password" });
@@ -70,23 +91,23 @@ async function startServer() {
     }
     activeDevPassword = req.body.newPassword;
     devPasswordMigrationRequired = false;
-    await writeSession(true);
+    await writeSession(res, true);
     res.json({ success: true });
   });
 
   app.post("/api/auth/logout", async (_req, res) => {
-    await writeSession(false);
+    await writeSession(res, false);
     res.json({ success: true });
   });
 
-  app.get("/api/auth/check", async (_req, res) => {
-    res.json({ authenticated: await readSession() });
+  app.get("/api/auth/check", async (req, res) => {
+    res.json({ authenticated: await readSession(req) });
   });
 
   // ── Settings ──────────────────────────────────────────────────────────────
   const isPublicSettingKey = (key: string) => [
     "phase", "hero_preset", "event_year", "festival_start", "festival_end", "tagline",
-    "show_meetings_section", "sponsorship_open", "sponsorship_state",
+    "show_meetings_section", "sponsorship_open", "sponsorship_state", "contribution_settings",
   ].includes(key)
     || /^hero_(planning|active|live)_(image|line1|line2|sub|ctaLabel|ctaHref)$/.test(key)
     || /^participate_(volunteer|vendor|performer|parade)$/.test(key);
@@ -102,7 +123,7 @@ async function startServer() {
     res.json(out);
   });
 
-  app.post("/api/settings", async (req, res) => {
+  app.post("/api/settings", requireDevAuth, async (req, res) => {
     const existing = await readJSON("settings");
     const map: Record<string, string> = {};
     for (const r of existing) map[r.setting_key] = r.setting_value;
@@ -116,6 +137,7 @@ async function startServer() {
 
   // ── Events ────────────────────────────────────────────────────────────────
   app.get("/api/event-series", async (req, res) => {
+    if (req.query.admin === "1" && !(await readSession(req))) return res.status(401).json({ error: "Unauthorized" });
     const series = await readJSON("event-series");
     const visible = req.query.admin === "1"
       ? series
@@ -125,7 +147,7 @@ async function startServer() {
     res.json(visible);
   });
 
-  app.post("/api/event-series", async (req, res) => {
+  app.post("/api/event-series", requireDevAuth, async (req, res) => {
     const series = await readJSON("event-series");
     const newSeries = {
       id: Date.now().toString(),
@@ -139,7 +161,7 @@ async function startServer() {
     res.status(201).json(newSeries);
   });
 
-  app.put("/api/event-series/:id", async (req, res) => {
+  app.put("/api/event-series/:id", requireDevAuth, async (req, res) => {
     const series = await readJSON("event-series");
     const idx = series.findIndex((s) => String(s.id) === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Not found" });
@@ -148,7 +170,7 @@ async function startServer() {
     res.json(series[idx]);
   });
 
-  app.delete("/api/event-series/:id", async (req, res) => {
+  app.delete("/api/event-series/:id", requireDevAuth, async (req, res) => {
     const series = await readJSON("event-series");
     await writeJSON("event-series", series.filter((s) => String(s.id) !== req.params.id));
     const events = await readJSON("events");
@@ -160,6 +182,7 @@ async function startServer() {
   });
 
   app.get("/api/events", async (req, res) => {
+    if (req.query.admin === "1" && !(await readSession(req))) return res.status(401).json({ error: "Unauthorized" });
     // Mirrors api/index.php's `ORDER BY sort_order ASC, id ASC` — the mock
     // JSON store's array order isn't otherwise meaningful.
     const events = await readJSON("events");
@@ -182,7 +205,7 @@ async function startServer() {
     }));
   });
 
-  app.post("/api/events", async (req, res) => {
+  app.post("/api/events", requireDevAuth, async (req, res) => {
     const events = await readJSON("events");
     const newEvent = {
       id: Date.now().toString(),
@@ -199,7 +222,7 @@ async function startServer() {
   // Bulk reorder — mirrors api/index.php's handle_events_reorder(). Must be
   // registered before the PUT /api/events/:id route below isn't an issue
   // (different HTTP verb), but kept here for readability alongside it.
-  app.post("/api/events/reorder", async (req, res) => {
+  app.post("/api/events/reorder", requireDevAuth, async (req, res) => {
     const events = await readJSON("events");
     const ids: string[] = req.body?.ids ?? [];
     ids.forEach((id, i) => {
@@ -210,7 +233,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  app.put("/api/events/:id", async (req, res) => {
+  app.put("/api/events/:id", requireDevAuth, async (req, res) => {
     const events = await readJSON("events");
     const idx = events.findIndex((e) => String(e.id) === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Not found" });
@@ -219,7 +242,7 @@ async function startServer() {
     res.json(events[idx]);
   });
 
-  app.delete("/api/events/:id", async (req, res) => {
+  app.delete("/api/events/:id", requireDevAuth, async (req, res) => {
     const events = await readJSON("events");
     await writeJSON("events", events.filter((e) => String(e.id) !== req.params.id));
     res.json({ success: true });
@@ -229,16 +252,29 @@ async function startServer() {
   const subResource = (resource: string) => {
     app.get(`/api/events/:id/${resource}`, async (req, res) => {
       const items = await readJSON(`${resource}_${req.params.id}`);
+      if (resource === "performers" && req.query.admin !== "1") {
+        return res.json(items.filter((item: any) => item.confirmed).map((item: any) => ({
+          id: item.id,
+          eventId: item.eventId,
+          name: item.name,
+          type: item.type,
+          bio: item.bio,
+          confirmed: true,
+          performanceTime: item.performanceTime,
+          sortOrder: item.sortOrder,
+        })));
+      }
+      if (!(await readSession(req))) return res.status(401).json({ error: "Unauthorized" });
       res.json(items);
     });
-    app.post(`/api/events/:id/${resource}`, async (req, res) => {
+    app.post(`/api/events/:id/${resource}`, requireDevAuth, async (req, res) => {
       const items = await readJSON(`${resource}_${req.params.id}`);
       const newItem = { id: Date.now(), ...req.body };
       items.push(newItem);
       await writeJSON(`${resource}_${req.params.id}`, items);
       res.status(201).json(newItem);
     });
-    app.put(`/api/events/:id/${resource}/:subId`, async (req, res) => {
+    app.put(`/api/events/:id/${resource}/:subId`, requireDevAuth, async (req, res) => {
       const items = await readJSON(`${resource}_${req.params.id}`);
       const idx = items.findIndex((i: any) => String(i.id) === req.params.subId);
       if (idx !== -1) {
@@ -247,7 +283,7 @@ async function startServer() {
       }
       res.json({ success: true });
     });
-    app.delete(`/api/events/:id/${resource}/:subId`, async (req, res) => {
+    app.delete(`/api/events/:id/${resource}/:subId`, requireDevAuth, async (req, res) => {
       const items = await readJSON(`${resource}_${req.params.id}`);
       await writeJSON(`${resource}_${req.params.id}`, items.filter((i: any) => String(i.id) !== req.params.subId));
       res.json({ success: true });
@@ -265,7 +301,7 @@ async function startServer() {
     res.json(await readJSON("meetings"));
   });
 
-  app.post("/api/meetings", async (req, res) => {
+  app.post("/api/meetings", requireDevAuth, async (req, res) => {
     const meetings = await readJSON("meetings");
     const newMeeting = { id: Date.now().toString(), ...req.body };
     meetings.push(newMeeting);
@@ -273,7 +309,7 @@ async function startServer() {
     res.status(201).json(newMeeting);
   });
 
-  app.put("/api/meetings/:id", async (req, res) => {
+  app.put("/api/meetings/:id", requireDevAuth, async (req, res) => {
     const meetings = await readJSON("meetings");
     const idx = meetings.findIndex((m) => String(m.id) === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Not found" });
@@ -282,7 +318,7 @@ async function startServer() {
     res.json(meetings[idx]);
   });
 
-  app.delete("/api/meetings/:id", async (req, res) => {
+  app.delete("/api/meetings/:id", requireDevAuth, async (req, res) => {
     const meetings = await readJSON("meetings");
     await writeJSON("meetings", meetings.filter((m) => String(m.id) !== req.params.id));
     res.json({ success: true });
@@ -293,14 +329,14 @@ async function startServer() {
     app.get(`/api/meetings/:id/${resource}`, async (req, res) => {
       res.json(await readJSON(`meeting_${resource}_${req.params.id}`));
     });
-    app.post(`/api/meetings/:id/${resource}`, async (req, res) => {
+    app.post(`/api/meetings/:id/${resource}`, requireDevAuth, async (req, res) => {
       const items = await readJSON(`meeting_${resource}_${req.params.id}`);
       const newItem = { id: Date.now(), ...req.body };
       items.push(newItem);
       await writeJSON(`meeting_${resource}_${req.params.id}`, items);
       res.status(201).json(newItem);
     });
-    app.put(`/api/meetings/:id/${resource}/:subId`, async (req, res) => {
+    app.put(`/api/meetings/:id/${resource}/:subId`, requireDevAuth, async (req, res) => {
       const items = await readJSON(`meeting_${resource}_${req.params.id}`);
       const idx = items.findIndex((i: any) => String(i.id) === req.params.subId);
       if (idx !== -1) {
@@ -309,7 +345,7 @@ async function startServer() {
       }
       res.json({ success: true });
     });
-    app.delete(`/api/meetings/:id/${resource}/:subId`, async (req, res) => {
+    app.delete(`/api/meetings/:id/${resource}/:subId`, requireDevAuth, async (req, res) => {
       const items = await readJSON(`meeting_${resource}_${req.params.id}`);
       await writeJSON(`meeting_${resource}_${req.params.id}`, items.filter((i: any) => String(i.id) !== req.params.subId));
       res.json({ success: true });
@@ -321,7 +357,7 @@ async function startServer() {
 
   // ── Suggestion box ────────────────────────────────────────────────────────
   // Mirrors handle_suggestions()/handle_suggestion_promote() in api/index.php.
-  app.get("/api/suggestions", async (req, res) => {
+  app.get("/api/suggestions", requireDevAuth, async (req, res) => {
     const all = await readJSON("suggestions");
     const status = req.query.status as string | undefined;
     res.json(status ? all.filter((s: any) => s.status === status) : all);
@@ -353,7 +389,7 @@ async function startServer() {
     res.status(201).json({ success: true });
   });
 
-  app.put("/api/suggestions/:id", async (req, res) => {
+  app.put("/api/suggestions/:id", requireDevAuth, async (req, res) => {
     const all = await readJSON("suggestions");
     const idx = all.findIndex((s: any) => String(s.id) === req.params.id);
     if (idx !== -1) {
@@ -363,13 +399,13 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  app.delete("/api/suggestions/:id", async (req, res) => {
+  app.delete("/api/suggestions/:id", requireDevAuth, async (req, res) => {
     const all = await readJSON("suggestions");
     await writeJSON("suggestions", all.filter((s: any) => String(s.id) !== req.params.id));
     res.json({ success: true });
   });
 
-  app.post("/api/suggestions/:id/promote", async (req, res) => {
+  app.post("/api/suggestions/:id/promote", requireDevAuth, async (req, res) => {
     const all = await readJSON("suggestions");
     const idx = all.findIndex((s: any) => String(s.id) === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Suggestion not found" });
@@ -402,7 +438,7 @@ async function startServer() {
     res.json(await readJSON("photos"));
   });
 
-  app.post("/api/photos", async (req, res) => {
+  app.post("/api/photos", requireDevAuth, async (req, res) => {
     const photos = await readJSON("photos");
     const item = { id: Date.now().toString(), visible: true, photoCount: 0, ...req.body };
     photos.push(item);
@@ -410,7 +446,7 @@ async function startServer() {
     res.json(item);
   });
 
-  app.put("/api/photos/:id", async (req, res) => {
+  app.put("/api/photos/:id", requireDevAuth, async (req, res) => {
     const photos = await readJSON("photos");
     const idx = photos.findIndex((p: any) => String(p.id) === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Not found" });
@@ -419,7 +455,7 @@ async function startServer() {
     res.json(photos[idx]);
   });
 
-  app.delete("/api/photos/:id", async (req, res) => {
+  app.delete("/api/photos/:id", requireDevAuth, async (req, res) => {
     const photos = await readJSON("photos");
     await writeJSON("photos", photos.filter((p: any) => String(p.id) !== req.params.id));
     res.json({ success: true });
@@ -430,7 +466,7 @@ async function startServer() {
     res.json(await readJSON("sponsors"));
   });
 
-  app.post("/api/sponsors", async (req, res) => {
+  app.post("/api/sponsors", requireDevAuth, async (req, res) => {
     const sponsors = await readJSON("sponsors");
     const newSponsor = { id: Date.now().toString(), ...req.body };
     sponsors.push(newSponsor);
@@ -438,7 +474,7 @@ async function startServer() {
     res.status(201).json(newSponsor);
   });
 
-  app.put("/api/sponsors/:id", async (req, res) => {
+  app.put("/api/sponsors/:id", requireDevAuth, async (req, res) => {
     const sponsors = await readJSON("sponsors");
     const idx = sponsors.findIndex((s) => String(s.id) === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Not found" });
@@ -447,7 +483,7 @@ async function startServer() {
     res.json(sponsors[idx]);
   });
 
-  app.delete("/api/sponsors/:id", async (req, res) => {
+  app.delete("/api/sponsors/:id", requireDevAuth, async (req, res) => {
     const sponsors = await readJSON("sponsors");
     await writeJSON("sponsors", sponsors.filter((s) => String(s.id) !== req.params.id));
     res.json({ success: true });
@@ -464,7 +500,7 @@ async function startServer() {
     res.json({ success: true, id: newApp.id });
   });
 
-  app.get("/api/applications", async (req, res) => {
+  app.get("/api/applications", requireDevAuth, async (req, res) => {
     const all = await readJSON("applications");
     const { type, status } = req.query as Record<string, string>;
     let filtered = all;
@@ -473,7 +509,7 @@ async function startServer() {
     res.json(filtered.reverse());
   });
 
-  app.put("/api/applications/:id", async (req, res) => {
+  app.put("/api/applications/:id", requireDevAuth, async (req, res) => {
     const all = await readJSON("applications");
     const idx = all.findIndex((a) => String(a.id) === req.params.id);
     if (idx !== -1) {
@@ -484,7 +520,7 @@ async function startServer() {
   });
 
   // ── Newsletter ────────────────────────────────────────────────────────────
-  app.get("/api/newsletter", async (_req, res) => {
+  app.get("/api/newsletter", requireDevAuth, async (_req, res) => {
     res.json(await readJSON("newsletter"));
   });
 
@@ -498,28 +534,47 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  app.delete("/api/newsletter/:id", async (req, res) => {
+  app.delete("/api/newsletter/:id", requireDevAuth, async (req, res) => {
     const subs = await readJSON("newsletter");
     await writeJSON("newsletter", subs.filter((s: any) => String(s.id) !== req.params.id));
     res.json({ success: true });
   });
 
   // ── Contribution notifications ────────────────────────────────────────────
-  app.get("/api/contributions", async (_req, res) => {
+  app.get("/api/contributions", async (req, res) => {
+    if (!(await readSession(req))) return res.status(401).json({ error: "Unauthorized" });
     const all = await readJSON("contributions");
     res.json([...all].reverse());
   });
 
   app.post("/api/contribute", async (req, res) => {
-    if (!req.body?.email) return res.status(400).json({ error: "Email required" });
+    if (req.body?.website?.trim()) return res.json({ success: true });
+    const email = String(req.body?.email || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
+    const allowedMethods = ["paypal", "venmo", "square", "stripe", "check"];
+    const method = String(req.body?.method || "").toLowerCase().trim();
+    if (method && !allowedMethods.includes(method)) return res.status(400).json({ error: "Invalid contribution method" });
+    const amount = req.body?.amount === null || req.body?.amount === "" || req.body?.amount === undefined
+      ? null : Number(req.body.amount);
+    if (amount !== null && (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000)) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
     const contributions = await readJSON("contributions");
-    contributions.push({ id: Date.now(), submittedAt: new Date().toISOString(), ...req.body });
+    contributions.push({
+      id: Date.now(),
+      submittedAt: new Date().toISOString(),
+      name: String(req.body?.name || "").trim().slice(0, 190),
+      email,
+      amount,
+      method: method || null,
+      message: String(req.body?.message || "").trim().slice(0, 4000),
+    });
     await writeJSON("contributions", contributions);
     res.json({ success: true });
   });
 
   // ── Dashboard stats ───────────────────────────────────────────────────────
-  app.get("/api/dashboard", async (_req, res) => {
+  app.get("/api/dashboard", requireDevAuth, async (_req, res) => {
     const [events, meetings, apps] = await Promise.all([
       readJSON("events"), readJSON("meetings"), readJSON("applications"),
     ]);
@@ -540,11 +595,11 @@ async function startServer() {
   });
 
   // ── Legacy compat ─────────────────────────────────────────────────────────
-  app.get("/api/data/:type", async (req, res) => {
+  app.get("/api/data/:type", requireDevAuth, async (req, res) => {
     res.json(await readJSON(req.params.type));
   });
 
-  app.post("/api/data/:type", async (req, res) => {
+  app.post("/api/data/:type", requireDevAuth, async (req, res) => {
     await writeJSON(req.params.type, req.body);
     res.json({ success: true });
   });

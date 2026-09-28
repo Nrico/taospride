@@ -15,7 +15,6 @@ import {
   MapPin,
   Clock,
   Mail,
-  Globe,
   ExternalLink,
   Menu,
   X,
@@ -99,11 +98,25 @@ export interface EventData {
 
 const toDateTimeInput = (value?: string) => value ? value.replace(' ', 'T').slice(0, 16) : '';
 
+const legacyEventDateKey = (event: EventData) => {
+  const value = (event.date || event.eventDate || '').trim();
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const named = value.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+  if (!named) return null;
+  const month = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+    .indexOf(named[1].toLowerCase()) + 1;
+  if (!month) return null;
+  return `${named[3]}-${String(month).padStart(2, '0')}-${String(Number(named[2])).padStart(2, '0')}`;
+};
+
 const eventChronologyKey = (event: EventData) =>
-  event.startAt?.replace('T', ' ') || (event.eventDateSort ? `${event.eventDateSort} 00:00:00` : '9999-12-31 23:59:59');
+  event.startAt?.replace('T', ' ') || (event.eventDateSort ? `${event.eventDateSort} 00:00:00` : null) ||
+  (legacyEventDateKey(event) ? `${legacyEventDateKey(event)} 00:00:00` : '9999-12-31 23:59:59');
 
 const eventEndKey = (event: EventData) =>
-  event.endAt?.replace('T', ' ') || event.startAt?.replace('T', ' ') || (event.eventDateSort ? `${event.eventDateSort} 23:59:59` : null);
+  event.endAt?.replace('T', ' ') || event.startAt?.replace('T', ' ') || (event.eventDateSort ? `${event.eventDateSort} 23:59:59` : null) ||
+  (legacyEventDateKey(event) ? `${legacyEventDateKey(event)} 23:59:59` : null);
 
 const mountainNowKey = () => {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -456,13 +469,66 @@ const TIER_COLORS: Record<string, string> = {
   'In-Kind': '#00BCD4',
 };
 
+type ContributionMethodKey = 'paypal' | 'venmo' | 'square' | 'stripe' | 'check';
+type ContributionState = 'open' | 'paused' | 'hidden';
+
+interface ContributionMethodConfig {
+  enabled: boolean;
+  label: string;
+  url: string;
+  instructions: string;
+}
+
+interface ContributionSettings {
+  state: ContributionState;
+  heading: string;
+  description: string;
+  showAcknowledgmentForm: boolean;
+  methods: Record<ContributionMethodKey, ContributionMethodConfig>;
+}
+
+const CONTRIBUTION_METHOD_KEYS: ContributionMethodKey[] = ['paypal', 'venmo', 'square', 'stripe', 'check'];
+
+// Kept only while the retired fixed-payment component remains in this file.
+// The live site uses the configurable provider links below instead.
 const CONTRIBUTION_IMPACTS = [
-  { amount: 25,  label: '$25',  blurb: 'Covers supplies for one volunteer shift' },
-  { amount: 50,  label: '$50',  blurb: 'Funds a volunteer t-shirt' },
-  { amount: 100, label: '$100', blurb: 'Pays the sound permit fee' },
-  { amount: 250, label: '$250', blurb: "Sponsors a performer's fee" },
-  { amount: 500, label: '$500', blurb: 'Covers venue permit & insurance' },
+  { amount: 25, label: '$25', blurb: 'Community support' },
+  { amount: 50, label: '$50', blurb: 'Community support' },
+  { amount: 100, label: '$100', blurb: 'Community support' },
+  { amount: 250, label: '$250', blurb: 'Community support' },
+  { amount: 500, label: '$500', blurb: 'Community support' },
 ];
+
+const CONTRIBUTION_DEFAULTS: ContributionSettings = {
+  state: 'hidden',
+  heading: 'Support Taos Pride',
+  description: 'Choose any currently available way to support Taos Pride.',
+  showAcknowledgmentForm: true,
+  methods: {
+    paypal: { enabled: false, label: 'PayPal', url: '', instructions: '' },
+    venmo: { enabled: false, label: 'Venmo', url: '', instructions: '' },
+    square: { enabled: false, label: 'Square', url: '', instructions: '' },
+    stripe: { enabled: false, label: 'Stripe', url: '', instructions: '' },
+    check: { enabled: false, label: 'Check', url: '', instructions: '' },
+  },
+};
+
+const parseContributionSettings = (raw?: string): ContributionSettings => {
+  if (!raw) return CONTRIBUTION_DEFAULTS;
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      ...CONTRIBUTION_DEFAULTS,
+      ...parsed,
+      methods: Object.fromEntries(CONTRIBUTION_METHOD_KEYS.map(key => [
+        key,
+        { ...CONTRIBUTION_DEFAULTS.methods[key], ...(parsed.methods?.[key] || {}) },
+      ])) as ContributionSettings['methods'],
+    };
+  } catch {
+    return CONTRIBUTION_DEFAULTS;
+  }
+};
 
 // --- Components ---
 
@@ -604,7 +670,7 @@ export const AdminDashboard = ({ events, meetings, sponsors }: { events: EventDa
 };
 
 // ── Admin: Tab bar ────────────────────────────────────────────────────────────
-type AdminTab = 'overview' | 'events' | 'meetings' | 'applications' | 'sponsors' | 'photos' | 'comms' | 'hero' | 'participation';
+type AdminTab = 'overview' | 'events' | 'meetings' | 'applications' | 'sponsors' | 'photos' | 'contributions' | 'comms' | 'hero' | 'participation';
 
 // Three reusable homepage-banner presets stored in site_settings.
 interface HeroPhaseConfig {
@@ -730,7 +796,8 @@ const AdminTabBar = ({ active, onChange }: { active: AdminTab; onChange: (t: Adm
     { id: 'applications', label: 'Applications', icon: <ClipboardList size={15} /> },
     { id: 'sponsors',     label: 'Sponsors',     icon: <Megaphone size={15} /> },
     { id: 'photos',       label: 'Photos',       icon: <Camera size={15} /> },
-    { id: 'comms',        label: 'Communications', icon: <Mail size={15} /> },
+    { id: 'contributions', label: 'Contributions', icon: <HandHeart size={15} /> },
+    { id: 'comms',        label: 'Mailing List',  icon: <Mail size={15} /> },
     { id: 'hero',         label: 'Hero Banner',  icon: <ImageIcon size={15} /> },
     { id: 'participation', label: 'Get Involved', icon: <Users size={15} /> },
   ];
@@ -897,7 +964,7 @@ const EventEditor = ({ event, series, onSave, onDelete, onDuplicate }: {
 
   useEffect(() => {
     if (!event.id) return;
-    api.get(`/api/events/${event.id}/performers`).then(setPerformers).catch(() => {});
+    api.get(`/api/events/${event.id}/performers?admin=1`).then(setPerformers).catch(() => {});
     api.get(`/api/events/${event.id}/costs`).then(setCosts).catch(() => {});
     api.get(`/api/events/${event.id}/materials`).then(setMaterials).catch(() => {});
     api.get(`/api/events/${event.id}/staff`).then(setStaff).catch(() => {});
@@ -2588,7 +2655,7 @@ const NewsletterForm = () => {
         <form onSubmit={submit} className="flex gap-2">
           <input type="email" required placeholder="your@email.com" value={email} onChange={e => setEmail(e.target.value)}
             className="bg-white border border-pink-200 rounded-lg px-4 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-pink-500/20" />
-          <button type="submit" disabled={submitting} className="p-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors shrink-0 disabled:opacity-60">
+          <button type="submit" aria-label="Subscribe to the newsletter" disabled={submitting} className="p-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors shrink-0 disabled:opacity-60">
             <ChevronRight size={20} />
           </button>
         </form>
@@ -2680,7 +2747,12 @@ const SuggestionBoxForm = () => {
   );
 };
 
-const Navbar = ({ showMeetings, showSponsors }: { showMeetings: boolean; showSponsors: boolean }) => {
+const Navbar = ({ showMeetings, showSponsors, showParticipation, showContribute }: {
+  showMeetings: boolean;
+  showSponsors: boolean;
+  showParticipation: boolean;
+  showContribute: boolean;
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -2693,7 +2765,7 @@ const Navbar = ({ showMeetings, showSponsors }: { showMeetings: boolean; showSpo
   const navLinks = [
     { name: 'Events', href: '#events' },
     { name: 'Meetings', href: '#meetings', hidden: !showMeetings },
-    { name: 'Volunteer', href: '#volunteer' },
+    { name: 'Get Involved', href: '#volunteer', hidden: !showParticipation },
     { name: 'Photos', href: '/gallery' },
     { name: 'Sponsors', href: '#sponsors', hidden: !showSponsors },
   ];
@@ -2719,16 +2791,18 @@ const Navbar = ({ showMeetings, showSponsors }: { showMeetings: boolean; showSpo
               {link.name}
             </a>
           ))}
-          <a 
-            href="#contribute" 
-            className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-full text-sm font-bold uppercase tracking-widest transition-all shadow-md hover:shadow-lg active:scale-95"
-          >
-            Donate
-          </a>
+          {showContribute && (
+            <a
+              href="#contribute"
+              className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-full text-sm font-bold uppercase tracking-widest transition-all shadow-md hover:shadow-lg active:scale-95"
+            >
+              Contribute
+            </a>
+          )}
         </div>
 
         {/* Mobile Toggle */}
-        <button className="md:hidden text-gray-900" onClick={() => setIsOpen(!isOpen)}>
+        <button className="md:hidden text-gray-900" aria-label={isOpen ? 'Close navigation menu' : 'Open navigation menu'} onClick={() => setIsOpen(!isOpen)}>
           {isOpen ? <X className={scrolled ? 'text-gray-900' : 'text-white'} /> : <Menu className={scrolled ? 'text-gray-900' : 'text-white'} />}
         </button>
       </div>
@@ -2752,13 +2826,15 @@ const Navbar = ({ showMeetings, showSponsors }: { showMeetings: boolean; showSpo
                 {link.name}
               </a>
             ))}
-            <a 
-              href="#contribute" 
-              onClick={() => setIsOpen(false)}
-              className="px-8 py-3 bg-pink-500 text-white rounded-full text-lg font-bold uppercase tracking-widest"
-            >
-              Donate
-            </a>
+            {showContribute && (
+              <a
+                href="#contribute"
+                onClick={() => setIsOpen(false)}
+                className="px-8 py-3 bg-pink-500 text-white rounded-full text-lg font-bold uppercase tracking-widest"
+              >
+                Contribute
+              </a>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -2884,7 +2960,7 @@ const PastEventsSection = ({ events, onOpen }: { events: EventData[]; onOpen: (e
 
   const byYear = new Map<number, EventData[]>();
   for (const ev of events) {
-    const dateKey = ev.startAt?.slice(0, 10) || ev.eventDateSort;
+    const dateKey = ev.startAt?.slice(0, 10) || ev.eventDateSort || legacyEventDateKey(ev);
     if (!dateKey) continue;
     const year = Number(dateKey.slice(0, 4));
     if (!byYear.has(year)) byYear.set(year, []);
@@ -3266,11 +3342,12 @@ const ParticipationCard = ({ config, typeKey, onOpen }: {
     }
   };
   return (
-    <motion.div
+    <motion.button
+      type="button"
       onClick={handleClick}
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
-      className={`p-10 rounded-3xl border-2 flex flex-col h-full bg-white group transition-all cursor-pointer ${colorClass}`}
+      className={`p-10 rounded-3xl border-2 flex flex-col h-full w-full bg-white group transition-all cursor-pointer text-left ${colorClass}`}
     >
       <div className="mb-6 w-16 h-16 rounded-2xl flex items-center justify-center text-white shadow-lg group-hover:rotate-12 transition-transform bg-gray-900">
         {icon}
@@ -3285,7 +3362,7 @@ const ParticipationCard = ({ config, typeKey, onOpen }: {
         {config.ctaLabel} <ChevronRight size={18} />
         {config.externalUrl && <ExternalLink size={14} className="opacity-60" />}
       </div>
-    </motion.div>
+    </motion.button>
   );
 };
 
@@ -3537,19 +3614,70 @@ export const PhotosAdmin = ({ albums, events, onRefresh }: { albums: PhotoAlbum[
 interface NewsletterSub { id: number; email: string; name: string; subscribedAt: string; }
 interface Contribution  { id: number; submittedAt: string; name?: string; email: string; amount?: number; method?: string; message?: string; }
 
-export const CommunicationsAdmin = () => {
-  const [tab, setTab] = useState<'newsletter' | 'contributions'>('newsletter');
+const csvCell = (value: unknown) => {
+  let text = value == null ? '' : String(value);
+  // Prevent spreadsheet applications from interpreting visitor-provided text
+  // as a formula when an administrator opens the export.
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+};
+
+const makeCSV = (rows: unknown[][]) => rows.map(row => row.map(csvCell).join(',')).join('\n');
+
+export const CommunicationsAdmin = ({ section = 'newsletter' }: { section?: 'newsletter' | 'contributions' }) => {
   const [subs, setSubs]     = useState<NewsletterSub[]>([]);
   const [contribs, setContribs] = useState<Contribution[]>([]);
+  const [contributionSettings, setContributionSettings] = useState<ContributionSettings>(CONTRIBUTION_DEFAULTS);
   const [loading, setLoading]   = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([api.get('/api/newsletter'), api.get('/api/contributions')])
-      .then(([n, c]) => { setSubs(n); setContribs(c); })
+    const requests = section === 'newsletter'
+      ? Promise.all([api.get('/api/newsletter'), Promise.resolve([]), api.get('/api/settings')])
+      : Promise.all([Promise.resolve([]), api.get('/api/contributions'), api.get('/api/settings')]);
+    requests
+      .then(([n, c, settings]) => {
+        setSubs(n);
+        setContribs(c);
+        setContributionSettings(parseContributionSettings(settings?.contribution_settings));
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [section]);
+
+  const saveContributionSettings = async () => {
+    if (contributionSettings.state === 'open') {
+      const invalid = CONTRIBUTION_METHOD_KEYS.filter(key => {
+        const method = contributionSettings.methods[key];
+        if (!method.enabled) return false;
+        if (key === 'check') return !method.instructions.trim();
+        try { return new URL(method.url).protocol !== 'https:'; } catch { return true; }
+      });
+      if (invalid.length > 0) {
+        alert(`Complete the ${invalid.join(', ')} configuration before opening the public contribution section.`);
+        return;
+      }
+    }
+    setSavingSettings(true);
+    try {
+      await api.post('/api/settings', { contribution_settings: JSON.stringify(contributionSettings) });
+      setSettingsSaved(true);
+      setTimeout(() => setSettingsSaved(false), 2500);
+    } catch {
+      alert('Could not save contribution settings.');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const updateMethod = (key: ContributionMethodKey, patch: Partial<ContributionMethodConfig>) => {
+    setContributionSettings(current => ({
+      ...current,
+      methods: { ...current.methods, [key]: { ...current.methods[key], ...patch } },
+    }));
+  };
 
   const deleteSub = async (id: number) => {
     if (!confirm('Remove this subscriber?')) return;
@@ -3558,9 +3686,11 @@ export const CommunicationsAdmin = () => {
   };
 
   const downloadCSV = () => {
-    const header = 'Email,Name,Subscribed At';
-    const rows = subs.map(s => `${s.email},${s.name || ''},${new Date(s.subscribedAt).toLocaleDateString()}`);
-    const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
+    const rows = [
+      ['Email', 'Name', 'Subscribed At'],
+      ...subs.map(s => [s.email, s.name || '', new Date(s.subscribedAt).toLocaleDateString()]),
+    ];
+    const blob = new Blob([makeCSV(rows)], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = 'taospride-newsletter.csv'; a.click();
@@ -3568,16 +3698,18 @@ export const CommunicationsAdmin = () => {
   };
 
   const downloadContribsCSV = () => {
-    const header = 'Date,Name,Email,Amount,Method,Message';
-    const rows = contribs.map(c => [
-      new Date(c.submittedAt).toLocaleDateString(),
-      c.name || '',
-      c.email,
-      c.amount ? `$${c.amount}` : '',
-      c.method || '',
-      (c.message || '').replace(/,/g, ';'),
-    ].join(','));
-    const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
+    const rows = [
+      ['Date', 'Name', 'Email', 'Amount', 'Method', 'Message'],
+      ...contribs.map(c => [
+        new Date(c.submittedAt).toLocaleDateString(),
+        c.name || '',
+        c.email,
+        c.amount ? `$${c.amount}` : '',
+        c.method || '',
+        c.message || '',
+      ]),
+    ];
+    const blob = new Blob([makeCSV(rows)], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = 'taospride-contributions.csv'; a.click();
@@ -3588,20 +3720,8 @@ export const CommunicationsAdmin = () => {
 
   return (
     <div className="space-y-6">
-      {/* Sub-tab */}
-      <div className="flex gap-2">
-        {(['newsletter', 'contributions'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-2 rounded-xl text-xs font-bold capitalize transition-all ${
-              tab === t ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-500 hover:border-gray-400'
-            }`}>
-            {t === 'newsletter' ? `Newsletter (${subs.length})` : `Contributions (${contribs.length})`}
-          </button>
-        ))}
-      </div>
-
       {/* Newsletter */}
-      {tab === 'newsletter' && (
+      {section === 'newsletter' && (
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div>
@@ -3616,7 +3736,7 @@ export const CommunicationsAdmin = () => {
           {subs.length === 0 ? (
             <p className="p-8 text-gray-400 text-sm italic text-center">No subscribers yet.</p>
           ) : (
-            <table className="w-full text-xs">
+            <table className="w-full min-w-[600px] text-xs">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   {['Email','Name','Subscribed',''].map(h => (
@@ -3644,12 +3764,78 @@ export const CommunicationsAdmin = () => {
       )}
 
       {/* Contributions */}
-      {tab === 'contributions' && (
+      {section === 'contributions' && (
+        <>
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 space-y-6">
+          <div>
+            <h2 className="text-xl font-black text-gray-900">Contribution Options</h2>
+            <p className="text-sm text-gray-500 mt-1">Publish only payment methods that Taos Pride has confirmed. Square and Stripe should use their hosted payment-link URLs; this site never handles card numbers.</p>
+          </div>
+
+          <div>
+            <p className="text-xs font-black uppercase tracking-widest text-gray-400 mb-2">Public section</p>
+            <div className="inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
+              {(['open', 'paused', 'hidden'] as ContributionState[]).map(state => (
+                <button key={state} type="button"
+                  onClick={() => setContributionSettings(current => ({ ...current, state }))}
+                  aria-pressed={contributionSettings.state === state}
+                  className={`px-4 py-2 rounded-lg text-xs font-black capitalize ${contributionSettings.state === state ? 'bg-gray-900 text-white' : 'text-gray-500'}`}>
+                  {state}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 mt-2">Open shows enabled methods. Paused keeps a short support message without payment links. Hidden removes the section and navigation link.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Heading"><input className={inputCls} value={contributionSettings.heading} onChange={e => setContributionSettings(current => ({ ...current, heading: e.target.value }))} /></Field>
+            <Field label="Public description"><textarea className={inputCls} rows={3} value={contributionSettings.description} onChange={e => setContributionSettings(current => ({ ...current, description: e.target.value }))} /></Field>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {CONTRIBUTION_METHOD_KEYS.map(key => {
+              const method = contributionSettings.methods[key];
+              return (
+                <div key={key} className={`rounded-2xl border-2 p-5 space-y-3 ${method.enabled ? 'border-pink-200 bg-pink-50/30' : 'border-gray-100 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-black text-gray-900 capitalize">{key}</p>
+                      <p className="text-xs text-gray-400">{key === 'check' ? 'Mailing or delivery instructions' : 'Hosted payment link'}</p>
+                    </div>
+                    <button type="button" onClick={() => updateMethod(key, { enabled: !method.enabled })}
+                      aria-pressed={method.enabled}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black ${method.enabled ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                      {method.enabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </div>
+                  <input className={inputCls} value={method.label} onChange={e => updateMethod(key, { label: e.target.value })} placeholder="Public label" />
+                  {key !== 'check' && <input type="url" className={inputCls} value={method.url} onChange={e => updateMethod(key, { url: e.target.value })} placeholder={`https://${key}.com/your-payment-link`} />}
+                  <textarea className={inputCls} rows={2} value={method.instructions} onChange={e => updateMethod(key, { instructions: e.target.value })} placeholder={key === 'check' ? 'Payable name and complete mailing instructions' : 'Optional note shown beside the link'} />
+                </div>
+              );
+            })}
+          </div>
+
+          <label className="flex items-center gap-3 text-sm font-bold text-gray-700">
+            <input type="checkbox" checked={contributionSettings.showAcknowledgmentForm}
+              onChange={e => setContributionSettings(current => ({ ...current, showAcknowledgmentForm: e.target.checked }))} />
+            Show the optional “Let us know” acknowledgment form
+          </label>
+
+          <div className="flex items-center gap-3">
+            <button onClick={saveContributionSettings} disabled={savingSettings}
+              className="px-6 py-3 bg-gray-900 text-white rounded-xl text-sm font-bold hover:bg-pink-500 disabled:opacity-50">
+              {savingSettings ? 'Saving…' : 'Save Contribution Settings'}
+            </button>
+            {settingsSaved && <span className="text-sm font-bold text-green-600">Saved</span>}
+          </div>
+        </div>
+
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div>
-              <h3 className="font-black text-gray-900">{contribs.length} Gift Notification{contribs.length !== 1 ? 's' : ''}</h3>
-              <p className="text-xs text-gray-400 mt-0.5">People who notified you of a gift via PayPal, Venmo, or check.</p>
+              <h3 className="font-black text-gray-900">{contribs.length} Self-Reported Gift Notification{contribs.length !== 1 ? 's' : ''}</h3>
+              <p className="text-xs text-gray-400 mt-0.5">These are acknowledgments submitted by visitors, not verified payment records or bookkeeping totals.</p>
             </div>
             {contribs.length > 0 && (
               <button onClick={downloadContribsCSV}
@@ -3661,7 +3847,7 @@ export const CommunicationsAdmin = () => {
           {contribs.length === 0 ? (
             <p className="p-8 text-gray-400 text-sm italic text-center">No gift notifications yet.</p>
           ) : (
-            <table className="w-full text-xs">
+            <table className="w-full min-w-[760px] text-xs">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   {['Date','Name','Email','Amount','Method','Message'].map(h => (
@@ -3695,17 +3881,20 @@ export const CommunicationsAdmin = () => {
           )}
           {contribs.length > 0 && (
             <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 text-right">
-              <span className="text-xs text-gray-400 font-bold">Total reported: </span>
+              <span className="text-xs text-gray-400 font-bold">Self-reported total: </span>
               <span className="text-sm font-black text-green-600">
                 ${contribs.reduce((s, c) => s + (c.amount || 0), 0).toLocaleString()}
               </span>
             </div>
           )}
         </div>
+        </>
       )}
     </div>
   );
 };
+
+export const ContributionsAdmin = () => <CommunicationsAdmin section="contributions" />;
 
 // ── Admin: Participation / Get Involved Editor ────────────────────────────────
 export const ParticipationAdmin = ({
@@ -4971,6 +5160,139 @@ const ContributionSection = () => {
   );
 };
 
+// Configurable contribution experience. Payment collection stays with each
+// provider's hosted page; Taos Pride never receives card or bank credentials.
+const ManagedContributionSection = ({ settings }: { settings: ContributionSettings }) => {
+  const safePaymentUrl = (value: string) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' ? url.toString() : '';
+    } catch {
+      return '';
+    }
+  };
+  const availableMethods = CONTRIBUTION_METHOD_KEYS.filter(key => {
+    const method = settings.methods[key];
+    return method.enabled && (key === 'check' ? Boolean(method.instructions.trim()) : Boolean(safePaymentUrl(method.url)));
+  });
+  const [form, setForm] = useState({ name: '', email: '', amount: '', method: availableMethods[0] || '', message: '', website: '' });
+  const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+
+  const submitAcknowledgment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatus('sending');
+    try {
+      await api.post('/api/contribute', {
+        name: form.name,
+        email: form.email,
+        amount: form.amount ? Number(form.amount) : null,
+        method: form.method,
+        message: form.message,
+      });
+      setStatus('done');
+    } catch {
+      setStatus('error');
+    }
+  };
+
+  return (
+    <section id="contribute" className="py-32 bg-[#151619] relative overflow-hidden">
+      <div className="absolute inset-0 opacity-10 pointer-events-none">
+        <div className="absolute inset-0 bg-gradient-to-br from-pink-500 via-yellow-500 to-blue-500 mix-blend-color" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_white_1px,_transparent_1px)] bg-[size:40px_40px]" />
+      </div>
+      <div className="relative z-10 max-w-5xl mx-auto px-6">
+        <div className="text-center mb-12">
+          <p className="text-pink-500 font-black uppercase tracking-[0.3em] text-xs mb-4">Community Support</p>
+          <h2 className="text-5xl md:text-6xl font-display font-black uppercase tracking-tighter text-white mb-6">{settings.heading}</h2>
+          <p className="text-white/60 max-w-2xl mx-auto leading-relaxed text-lg">{settings.description}</p>
+        </div>
+
+        {settings.state === 'paused' ? (
+          <div className="max-w-2xl mx-auto rounded-3xl border border-white/10 bg-white/5 p-10 text-center">
+            <h3 className="text-white text-xl font-black">Contribution options are being updated</h3>
+            <p className="text-white/50 text-sm mt-3">Please check back soon or contact <a className="text-pink-400 underline" href="mailto:info@taospride.org">info@taospride.org</a>.</p>
+          </div>
+        ) : (
+          <>
+            {availableMethods.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-12">
+                {availableMethods.map(key => {
+                  const method = settings.methods[key];
+                  const content = (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-white font-black text-xl">{method.label || key}</h3>
+                        {key !== 'check' && <ExternalLink size={16} className="text-pink-400" />}
+                      </div>
+                      {method.instructions && <p className="text-white/50 text-sm leading-relaxed mt-3 whitespace-pre-line">{method.instructions}</p>}
+                      {key !== 'check' && <p className="text-pink-400 text-xs font-black uppercase tracking-widest mt-5">Continue securely →</p>}
+                    </>
+                  );
+                  return key === 'check' ? (
+                    <div key={key} className="rounded-2xl border border-white/10 bg-white/5 p-6">{content}</div>
+                  ) : (
+                    <a key={key} href={safePaymentUrl(method.url)} target="_blank" rel="noopener noreferrer"
+                      className="rounded-2xl border border-white/10 bg-white/5 p-6 hover:border-pink-500/60 hover:bg-white/10 transition-colors">
+                      {content}
+                    </a>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="max-w-2xl mx-auto rounded-3xl border border-white/10 bg-white/5 p-10 text-center mb-12">
+                <p className="text-white/60">Online contribution options are coming soon.</p>
+              </div>
+            )}
+
+            {settings.showAcknowledgmentForm && availableMethods.length > 0 && (
+              <div className="max-w-2xl mx-auto rounded-3xl border border-white/10 bg-white/5 p-8">
+                {status === 'done' ? (
+                  <div className="text-center py-4">
+                    <CheckCircle2 size={42} className="text-green-400 mx-auto mb-4" />
+                    <h3 className="text-white text-2xl font-black">Thank you for letting us know</h3>
+                    <p className="text-white/50 text-sm mt-2">This notification helps the Taos Pride team follow up with you.</p>
+                  </div>
+                ) : (
+                  <form onSubmit={submitAcknowledgment} className="space-y-4">
+                    <input type="text" name="website" value={form.website}
+                      onChange={e => setForm(current => ({ ...current, website: e.target.value }))}
+                      tabIndex={-1} autoComplete="off" aria-hidden="true"
+                      className="absolute w-px h-px opacity-0 overflow-hidden -z-10" style={{ left: '-9999px' }} />
+                    <div>
+                      <h3 className="text-white font-black text-xl">Already contributed?</h3>
+                      <p className="text-white/40 text-sm mt-1">Optionally let the Taos Pride team know. This form does not process or verify a payment and is not a tax receipt.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <input value={form.name} onChange={e => setForm(current => ({ ...current, name: e.target.value }))}
+                        className="bg-white/10 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30" placeholder="Name (optional)" />
+                      <input required type="email" value={form.email} onChange={e => setForm(current => ({ ...current, email: e.target.value }))}
+                        className="bg-white/10 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30" placeholder="Email" />
+                      <select value={form.method} onChange={e => setForm(current => ({ ...current, method: e.target.value as ContributionMethodKey }))}
+                        className="bg-gray-800 border border-white/10 rounded-xl px-4 py-3 text-white">
+                        {availableMethods.map(key => <option key={key} value={key}>{settings.methods[key].label || key}</option>)}
+                      </select>
+                      <input type="number" min="0" step="0.01" value={form.amount} onChange={e => setForm(current => ({ ...current, amount: e.target.value }))}
+                        className="bg-white/10 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30" placeholder="Amount (optional)" />
+                    </div>
+                    <textarea rows={3} value={form.message} onChange={e => setForm(current => ({ ...current, message: e.target.value }))}
+                      className="w-full bg-white/10 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30 resize-none" placeholder="Message (optional)" />
+                    {status === 'error' && <p role="alert" className="text-red-400 text-sm">We could not save your note. Please email info@taospride.org.</p>}
+                    <button type="submit" disabled={status === 'sending'}
+                      className="w-full rounded-xl bg-pink-500 py-3 text-sm font-black uppercase tracking-widest text-white hover:bg-pink-600 disabled:opacity-50">
+                      {status === 'sending' ? 'Sending…' : 'Send Acknowledgment'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+};
+
 export default function App() {
   const [heroPreset, setHeroPreset] = useState<HeroPreset>('PLANNING');
   const [isManageMode, setIsManageMode] = useState(false);
@@ -4995,6 +5317,7 @@ export default function App() {
   // changed, regardless of the banner preset.
   const [showMeetings, setShowMeetings] = useState(true);
   const [sponsorshipState, setSponsorshipState] = useState<SponsorshipState>('open');
+  const [contributionSettings, setContributionSettings] = useState<ContributionSettings>(CONTRIBUTION_DEFAULTS);
 
   useEffect(() => {
     const handleHash = () => setIsManageMode(window.location.hash === '#manage');
@@ -5017,13 +5340,9 @@ export default function App() {
 
       setEvents(dataE || []);
       setEventSeries(dataSeries || []);
-      const loadedMeetings: Meeting[] = dataM.length ? dataM : [
-        { id: 'm1', date: 'Date TBD', time: '6:30 PM', location: 'Meeting Room', whoIsInvited: 'Everyone' }
-      ];
+      const loadedMeetings: Meeting[] = dataM || [];
       setMeetings(loadedMeetings.map(meeting => ({ ...meeting, isPast: meetingIsPast(meeting) })));
-      setSponsors(dataS.length ? dataS : [
-        { name: 'Taos Ski Valley', level: 'Platinum', logoInitials: 'TSV' }
-      ]);
+      setSponsors(dataS || []);
       setAlbums(dataP || []);
 
       const savedHeroPreset = settings?.hero_preset || settings?.phase;
@@ -5031,6 +5350,7 @@ export default function App() {
       setShowMeetings(settings?.show_meetings_section !== '0');
       const legacySponsorshipState: SponsorshipState = settings?.sponsorship_open === '0' ? 'closed' : 'open';
       setSponsorshipState(settings?.sponsorship_state || legacySponsorshipState);
+      setContributionSettings(parseContributionSettings(settings?.contribution_settings));
 
       // Extract hero settings from flat settings map
       const readPhase = (slug: string, defaults: HeroPhaseConfig): HeroPhaseConfig => ({
@@ -5218,6 +5538,10 @@ export default function App() {
             <CommunicationsAdmin />
           )}
 
+          {adminTab === 'contributions' && (
+            <ContributionsAdmin />
+          )}
+
           {adminTab === 'hero' && (
             <HeroEditor initial={heroSettings} onSaved={setHeroSettings} />
           )}
@@ -5233,7 +5557,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFCF8] text-gray-900 font-sans selection:bg-pink-200 selection:text-pink-900 pb-20">
-      <Navbar showMeetings={showMeetings} showSponsors={sponsorshipState !== 'hidden'} />
+      <Navbar
+        showMeetings={showMeetings}
+        showSponsors={sponsorshipState !== 'hidden'}
+        showParticipation={visibleParticipationKeys.length > 0}
+        showContribute={contributionSettings.state !== 'hidden'}
+      />
       
       {activeFormType && (
         <ParticipationForm
@@ -5401,6 +5730,7 @@ export default function App() {
       </section>
 
       {/* Participation / Get Involved */}
+      {visibleParticipationKeys.length > 0 && (
       <section id="volunteer" className="py-32 bg-gray-50/50 px-6 border-y border-gray-100">
         <div className="max-w-7xl mx-auto">
           <SectionHeading subtitle="Help us make Taos Pride the best one yet. We can't do it without you.">
@@ -5429,9 +5759,10 @@ export default function App() {
           </div>
         </div>
       </section>
+      )}
 
       {sponsorshipState !== 'hidden' && <SponsorshipSection sponsors={sponsors} state={sponsorshipState} />}
-      <ContributionSection />
+      {contributionSettings.state !== 'hidden' && <ManagedContributionSection settings={contributionSettings} />}
 
       {/* Footer */}
       <footer className="bg-white py-20 px-6 border-t border-gray-100">
@@ -5447,8 +5778,11 @@ export default function App() {
               Taos Pride is a grassroots community organization dedicated to celebrating, supporting, and empowering LGBTQ+ individuals and their allies in Taos and beyond.
             </p>
             <div className="flex gap-4">
-              {[Globe, Mail, Camera].map((Icon, i) => (
-                <a key={i} href="#" className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-pink-50 hover:text-pink-500 transition-colors">
+              {[
+                { Icon: Mail, label: 'Email Taos Pride', href: 'mailto:info@taospride.org' },
+                { Icon: Camera, label: 'Open the photo library', href: '/gallery' },
+              ].map(({ Icon, label, href }) => (
+                <a key={href} href={href} aria-label={label} className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-pink-50 hover:text-pink-500 transition-colors">
                   <Icon size={20} />
                 </a>
               ))}
@@ -5459,7 +5793,7 @@ export default function App() {
             <h4 className="font-black uppercase tracking-widest text-sm mb-6 text-gray-900">Quick Links</h4>
             <ul className="space-y-4 text-gray-500 font-medium">
               <li><a href="#events" className="hover:text-pink-500 transition-colors">Events & Schedule</a></li>
-              <li><a href="#volunteer" className="hover:text-pink-500 transition-colors">Volunteer Opportunities</a></li>
+              {visibleParticipationKeys.length > 0 && <li><a href="#volunteer" className="hover:text-pink-500 transition-colors">Get Involved</a></li>}
               <li><a href="/gallery" className="hover:text-pink-500 transition-colors">Photo Library</a></li>
               {/* Matches the Meetings section's own showMeetings toggle above —
                   keeps this link in sync with whether the section actually exists. */}

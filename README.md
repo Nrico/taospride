@@ -33,6 +33,7 @@ Production site content and credentials live in MySQL; the schema is in
 `database/schema.sql`.
 
 See [DEPLOY.md](DEPLOY.md) for the GoDaddy deployment and verification steps.
+The current product and content assessment is in [SITE_REVIEW.md](SITE_REVIEW.md).
 
 ## Security
 
